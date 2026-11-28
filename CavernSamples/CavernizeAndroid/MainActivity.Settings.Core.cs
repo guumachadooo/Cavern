@@ -154,7 +154,7 @@ public partial class MainActivity {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
         page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
 
-        isSettingsProMode = GetSharedPreferences("cavernize_settings", FileCreationMode.Private)?.GetBoolean("settings_pro_mode", true) ?? true;
+        isSettingsProMode = GetSharedPreferences("cavernize_settings", FileCreationMode.Private)?.GetBoolean("settings_pro_mode", false) ?? false;
         settingsCardsRegistry.Clear();
         settingsSearchQuery = "";
         activeSettingsCategory = -1;
@@ -198,7 +198,12 @@ public partial class MainActivity {
                 return;
             }
             settingsSearchQuery = raw;
-            RefreshSettingsHubVisibility();
+            if (neuralProSection != null && !isNeuralProExpanded) {
+            neuralProSection.Visibility = isSettingsProMode ? ViewStates.Visible : ViewStates.Gone;
+        }
+        RefreshSettingsHubVisibility();
+        RefreshSoundHubCardsUi();
+        Refresh3DStageProVisibility();
             SyncPredictiveBackRegistration();
         };
 
@@ -361,7 +366,12 @@ public partial class MainActivity {
         RefreshTruehddCardUi();
         RefreshSettingsUpdateUi();
         RefreshSettingsCategorySubtitles();
+        if (neuralProSection != null && !isNeuralProExpanded) {
+            neuralProSection.Visibility = isSettingsProMode ? ViewStates.Visible : ViewStates.Gone;
+        }
         RefreshSettingsHubVisibility();
+        RefreshSoundHubCardsUi();
+        Refresh3DStageProVisibility();
         return page;
     }
 
@@ -577,16 +587,28 @@ public partial class MainActivity {
         return false;
     }
 
-    public void JumpToSettingsCategory(int catIndex) {
-        SwitchTab(4);
+    public void JumpToSettingsCategory(int catIndex) => SwitchToSettingsCategory(catIndex);
+
+    public void SwitchToSettingsCategory(int catIndex) {
+        int clamped = Math.Clamp(catIndex, -1, 5);
+        if (clamped >= 4) {
+            ShowAppSettingsSheet(openDeveloperSubPage: clamped == 5 && isDeveloperSubPageEnabled);
+            return;
+        }
+        SwitchTab(1);
         ClearSettingsSearch();
-        OpenSettingsCategory(Math.Clamp(catIndex, -1, 5));
+        OpenSettingsCategory(clamped);
     }
 
     void OpenSettingsCategory(int catIndex) {
         activeSettingsCategory = Math.Clamp(catIndex, -1, 5);
         RefreshSettingsCategorySubtitles();
+        if (neuralProSection != null && !isNeuralProExpanded) {
+            neuralProSection.Visibility = isSettingsProMode ? ViewStates.Visible : ViewStates.Gone;
+        }
         RefreshSettingsHubVisibility();
+        RefreshSoundHubCardsUi();
+        Refresh3DStageProVisibility();
         SyncPredictiveBackRegistration();
     }
 
@@ -598,7 +620,12 @@ public partial class MainActivity {
             if (settingsSearchClearBtn != null) {
                 settingsSearchClearBtn.Visibility = ViewStates.Gone;
             }
-            RefreshSettingsHubVisibility();
+            if (neuralProSection != null && !isNeuralProExpanded) {
+            neuralProSection.Visibility = isSettingsProMode ? ViewStates.Visible : ViewStates.Gone;
+        }
+        RefreshSettingsHubVisibility();
+        RefreshSoundHubCardsUi();
+        Refresh3DStageProVisibility();
             SyncPredictiveBackRegistration();
         }
     }
@@ -625,7 +652,12 @@ public partial class MainActivity {
                 isSettingsProMode ? S["SettingsModeProChip"] : S["SettingsModeEssentialChip"],
                 isSettingsProMode ? OneUiTheme.Primary : OneUiTheme.IconSystemInfo);
         }
+        if (neuralProSection != null && !isNeuralProExpanded) {
+            neuralProSection.Visibility = isSettingsProMode ? ViewStates.Visible : ViewStates.Gone;
+        }
         RefreshSettingsHubVisibility();
+        RefreshSoundHubCardsUi();
+        Refresh3DStageProVisibility();
     }
 
     static void CollectViewText(View v, System.Text.StringBuilder sb) {

@@ -34,6 +34,8 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    LinearLayout proAudioDetailsSection;
+    LinearLayout proAudioLiveMicDetailsSection;
     OneUiInlineSelector proAudioMicSourceSelector;
 
     void BuildSettingsProAudioCards() {
@@ -67,6 +69,7 @@ public partial class MainActivity {
             BottomMargin = Dp(8)
         });
 
+                proAudioDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         proAudioPathSelector = new OneUiInlineSelector(this, S["ProAudioPathTitle"]);
         string[] proAudioPathLabels = [
             S["ProAudioPathAuto"],
@@ -79,7 +82,7 @@ public partial class MainActivity {
             store.ProAudioPreferredPathIndex = pos;
             ApplyAndRefreshProAudio();
         };
-        proAudioCard.AddView(WrapControlWithHelp(proAudioPathSelector, S["ProAudioPathTitle"].TrimEnd(':'), S["TipProAudioPath"], bottomMarginDp: 8));
+        proAudioDetailsSection.AddView(WrapControlWithHelp(proAudioPathSelector, S["ProAudioPathTitle"].TrimEnd(':'), S["TipProAudioPath"], bottomMarginDp: 8));
 
         proAudioBufferSelector = new OneUiInlineSelector(this, S["ProAudioBufferTitle"]);
         string[] proAudioBufLabels = [S["ProAudioBuf64"], S["ProAudioBuf128"], S["ProAudioBuf256"]];
@@ -89,7 +92,7 @@ public partial class MainActivity {
             store.ProAudioBufferFrames = pos == 0 ? 64 : (pos == 1 ? 128 : 256);
             ApplyAndRefreshProAudio();
         };
-        proAudioCard.AddView(WrapControlWithHelp(proAudioBufferSelector, S["ProAudioBufferTitle"].TrimEnd(':'), S["TipProAudioBuffer"], bottomMarginDp: 8));
+        proAudioDetailsSection.AddView(WrapControlWithHelp(proAudioBufferSelector, S["ProAudioBufferTitle"].TrimEnd(':'), S["TipProAudioBuffer"], bottomMarginDp: 8));
 
         proAudioSrSelector = new OneUiInlineSelector(this, S["ProAudioSampleRateTitle"]);
         string[] proAudioSrLabels = [S["ProAudioSrAuto"], "44.1 kHz", "48 kHz", "96 kHz", "192 kHz"];
@@ -99,15 +102,16 @@ public partial class MainActivity {
             store.ProAudioLockedSampleRate = ProAudioSampleRateValues[Math.Clamp(pos, 0, ProAudioSampleRateValues.Length - 1)];
             ApplyAndRefreshProAudio();
         };
-        proAudioCard.AddView(proAudioSrSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        proAudioDetailsSection.AddView(proAudioSrSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
 
-        AddDivider(proAudioCard);
-        proAudioLiveMicSwitch = AddSwitchRow(proAudioCard, S["ProAudioLiveMicTitle"], store.LiveMicEnabled, v => {
+        AddDivider(proAudioDetailsSection);
+        proAudioLiveMicSwitch = AddSwitchRow(proAudioDetailsSection, S["ProAudioLiveMicTitle"], store.LiveMicEnabled, v => {
             store.LiveMicEnabled = v;
             if (v) {
                 RequestRecordAudioPermissionIfNeeded();
+        proAudioLiveMicDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
                 if (!store.ProAudioEnabled) {
                     store.ProAudioEnabled = true;
                 }
@@ -125,7 +129,7 @@ public partial class MainActivity {
         proAudioMicSourceSelector.SelectionChanged += pos => {
             ApplyMicSourceSelection((Cavernize.Logic.Spatial.ProAudioMicSource)Math.Clamp(pos, 0, 2));
         };
-        proAudioCard.AddView(proAudioMicSourceSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        proAudioLiveMicDetailsSection.AddView(proAudioMicSourceSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(4),
             BottomMargin = Dp(6)
         });
@@ -142,13 +146,13 @@ public partial class MainActivity {
             store.LiveMicRoutingIndex = pos;
             ApplyAndRefreshProAudio();
         };
-        proAudioCard.AddView(proAudioMicRouteSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        proAudioLiveMicDetailsSection.AddView(proAudioMicRouteSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(4),
             BottomMargin = Dp(8)
         });
 
         (proAudioMicGainBar, _) = AddSliderRow(
-            proAudioCard,
+            proAudioLiveMicDetailsSection,
             S["ProAudioMicGainTitle"],
             -18,
             24,
@@ -161,7 +165,7 @@ public partial class MainActivity {
             defaultValue: 0);
 
         (proAudioMicMonitorBar, _) = AddSliderRow(
-            proAudioCard,
+            proAudioLiveMicDetailsSection,
             S["ProAudioMicMonitorTitle"],
             0,
             125,
@@ -185,7 +189,7 @@ public partial class MainActivity {
         Button calibrateRttBtn = PillButton(S["ProAudioCalibrateRttBtn"], ShowCalibrateRttModal);
         proAudioRow1.AddView(proAudioGrantUsbBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(8) });
         proAudioRow1.AddView(calibrateRttBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.95f));
-        proAudioCard.AddView(proAudioRow1, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        proAudioLiveMicDetailsSection.AddView(proAudioRow1, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(4),
             BottomMargin = Dp(8)
         });
@@ -195,14 +199,16 @@ public partial class MainActivity {
         proAudioVocalChainBtn = PillButton(S["ProAudioVocalChainBtn"], ShowAutoVocalMixMatchModal, active: true);
         proAudioRow2.AddView(proAudioScarlettBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         proAudioRow2.AddView(proAudioVocalChainBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        proAudioCard.AddView(proAudioRow2, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        proAudioLiveMicDetailsSection.AddView(proAudioRow2, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
 
         LinearLayout proAudioRow3 = HRow();
         Button proAudioCreditsBtn = PillButton(S["ProAudioCreditsBtn"], ShowProAudioCreditsModal);
         proAudioRow3.AddView(proAudioCreditsBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        proAudioCard.AddView(proAudioRow3, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        proAudioLiveMicDetailsSection.AddView(proAudioRow3, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        proAudioDetailsSection.AddView(proAudioLiveMicDetailsSection);
+        proAudioCard.AddView(proAudioDetailsSection);
         RegisterSettingsCard(proAudioCard, categoryIndex: 3, isProOnly: true, "pro audio usb aaudio libusb uac2 microphone live mic vocal mix match focusrite scarlett 2i2 4i4 rtt");
 
     }
@@ -245,6 +251,12 @@ public partial class MainActivity {
     }
 
     void RefreshProAudioUi() {
+        if (proAudioDetailsSection != null && store != null) {
+            proAudioDetailsSection.Visibility = store.ProAudioEnabled ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (proAudioLiveMicDetailsSection != null && store != null) {
+            proAudioLiveMicDetailsSection.Visibility = (store.ProAudioEnabled && store.LiveMicEnabled) ? ViewStates.Visible : ViewStates.Gone;
+        }
         if (uiDestroyed || store == null) {
             return;
         }

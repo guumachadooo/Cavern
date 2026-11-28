@@ -758,7 +758,7 @@ def check_rpe_sbe_and_memory_governor() -> tuple[list[str], dict[str, Any]]:
 
     rpe_files = sorted(RPE_DIR.glob("RealtimePlayerEngine*.cs"))
     rpe_src = "\n".join(_read_text(p) for p in rpe_files)
-    sbe_src = _read_text(SBE_PATH)
+    sbe_src = "\n".join(_read_text(f) for f in sorted(RPE_DIR.glob("StudioBatchExporter*.cs")))
 
     for stage in DSP_PARITY_LEDGER["shared_stages"]:
         sid = stage["id"]

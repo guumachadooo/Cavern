@@ -194,13 +194,13 @@ public partial class MainActivity {
             Stopwatch swL8 = Stopwatch.StartNew();
             UiAuditAccumulator accL8 = new();
 
-            string[] tabLabels = ["Tab0:Player", "Tab1:3DRoom", "Tab2:Studio", "Tab3:Stems", "Tab4:SettingsHub"];
-            for (int t = 0; t <= 4; t++) {
+            string[] tabLabels = ["Tab0:Library", "Tab1:Sound", "Tab2:Export"];
+            for (int t = 0; t < tabLabels.Length; t++) {
                 ct.ThrowIfCancellationRequested();
                 int tabIdx = t;
                 (UiPerfSample perf, bool vsyncOk) = await MeasureUiTransitionAsync(tabLabels[tabIdx], () => {
                     SwitchTab(tabIdx);
-                    if (tabIdx == 4) {
+                    if (tabIdx == 1) {
                         ClearSettingsSearch();
                         OpenSettingsCategory(-1);
                     }
@@ -218,13 +218,13 @@ public partial class MainActivity {
 
             // Walk all 6 Settings categories in Pro mode so every hidden/pro card is audited too
             await RunOnUiThreadWithTimeoutAsync(() => {
-                SwitchTab(4);
+                SwitchTab(1);
                 SetSettingsProMode(true);
                 ClearSettingsSearch();
                 return true;
             }, 4000).ConfigureAwait(false);
 
-            for (int cat = 0; cat < 6; cat++) {
+            for (int cat = 0; cat < 4; cat++) {
                 ct.ThrowIfCancellationRequested();
                 int catIdx = cat;
                 string catLabel = $"SettingsCat{catIdx}";
@@ -364,7 +364,7 @@ public partial class MainActivity {
             int selectorChecks = 0;
 
             await RunOnUiThreadWithTimeoutAsync(() => {
-                SwitchTab(4);
+                SwitchTab(1);
                 OpenSettingsCategory(-1);
 
                 // 1. Settings search filter -> verify non-empty matches -> clear

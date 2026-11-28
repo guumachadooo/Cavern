@@ -667,31 +667,25 @@ public partial class MainActivity : Activity, ICavernizeApp {
         currentHeaderStatusText = S["SelectFilePill"];
         currentTrackSummaryText = "";
 
-        // Persistent Chrome-Aware Top Workspace Source Bar (stationary across 3D Room / Studio / Stems / Settings;
-        // animates ONLY when entering or leaving Play tab)
-        workspaceChromeHost = new LinearLayout(this) {
-            Orientation = Orientation.Vertical,
-            Visibility = activeTab != 0 ? ViewStates.Visible : ViewStates.Gone
-        };
-        workspaceChromeHost.SetPadding(Dp(14), Dp(6), Dp(14), Dp(4));
-        workspaceChromeHost.AddView(
-            CreateWorkspaceSourceBar(),
-            new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        root.AddView(workspaceChromeHost, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        // W55.4.1: Removed global workspaceChromeHost (Source File bar now lives locally inside Export tab only).
+        workspaceChromeHost = null;
 
-        // Tab content frame with horizontal swipe between non-Play tabs (can swipe into Play, never away from Play)
+        // Compact One UI 9 Top Shell Header (active tab title + top-right Settings Gear with OTA badge)
+        root.AddView(BuildTopShellHeader(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        // 3-Tab content frame with horizontal swipe across Library | Sound | Export
         TabSwipeHostLayout contentFrame = new(
             this,
             () => activeTab,
             () => tabContainers?.Length ?? 0,
             idx => (tabContainers != null && idx >= 0 && idx < tabContainers.Length) ? tabContainers[idx] : null,
-            SwitchTabInternal);
-        LinearLayout musicTab = BuildMusicPlayerTab();
-        LinearLayout playerTab = BuildPlayerTab();
-        LinearLayout convertTab = BuildConverterTab();
-        LinearLayout extractTab = BuildExtractorTab();
-        LinearLayout settingsTab = BuildSettingsTab();
-        tabPages = [musicTab, playerTab, convertTab, extractTab, settingsTab];
+            SwitchTabInternal,
+            () => !isNowPlayingSheetOpen);
+        LinearLayout libraryTab = BuildMusicPlayerTab();
+        LinearLayout stage3dTab = BuildPlayerTab();
+        LinearLayout soundTab = BuildSoundHubTab();
+        LinearLayout exportTab = BuildUnifiedExportTab();
+        tabPages = [libraryTab, soundTab, exportTab];
         tabContainers = new View[tabPages.Length];
 
         for (int i = 0; i < tabPages.Length; i++) {
@@ -747,23 +741,21 @@ public partial class MainActivity : Activity, ICavernizeApp {
         });
 
         LinearLayout navRow = HRow();
-        string[] tabTitles = [S["TabMusicPlayer"], S["TabPlayer"], S["TabConvert"], S["TabExtract"], S["TabSettings"]];
+        string[] tabTitles = [S["TabLibrary"], S["TabSound"], S["TabExport"]];
         OneUiTabKind[] tabKinds = [
             OneUiTabKind.Player,
             OneUiTabKind.Room3D,
-            OneUiTabKind.Studio,
-            OneUiTabKind.Stems,
-            OneUiTabKind.Settings
+            OneUiTabKind.Studio
         ];
-        tabCells = new LinearLayout[5];
-        tabIcons = new OneUiTabIconView[5];
-        tabLabels = new TextView[5];
-        for (int i = 0; i < 5; i++) {
+        tabCells = new LinearLayout[3];
+        tabIcons = new OneUiTabIconView[3];
+        tabLabels = new TextView[3];
+        for (int i = 0; i < 3; i++) {
             int idx = i;
             LinearLayout cell = new(this) { Orientation = Orientation.Vertical };
             cell.SetGravity(GravityFlags.Center);
             cell.SetMinimumHeight(Dp(48));
-            cell.SetPadding(Dp(2), Dp(4), Dp(2), Dp(4));
+            cell.SetPadding(Dp(6), Dp(4), Dp(6), Dp(4));
             cell.Background = OneUiTheme.CreateRippleRoundedDrawable(this, Color.Transparent, OneUiTheme.PillCornerDp);
             OneUiTheme.AttachRecoil(cell, 0.94f);
 
@@ -772,7 +764,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
             TextView labelTv = new(this) {
                 Text = tabTitles[i],
-                TextSize = 10.5f,
+                TextSize = 11f,
                 Gravity = GravityFlags.Center
             };
             labelTv.SetIncludeFontPadding(false);
@@ -787,27 +779,19 @@ public partial class MainActivity : Activity, ICavernizeApp {
             tabCells[i] = cell;
             tabIcons[i] = iconView;
             tabLabels[i] = labelTv;
-
-            if (i == 4) {
-                FrameLayout tabCell = new(this);
-                tabCell.AddView(cell, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-
-                settingsUpdateDot = new View(this);
-                settingsUpdateDot.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.IconAtmosUpmix, 99f);
-                settingsUpdateDot.Visibility = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone;
-                FrameLayout.LayoutParams dotLp = new(Dp(7), Dp(7)) {
-                    Gravity = GravityFlags.Top | GravityFlags.End,
-                    TopMargin = Dp(4),
-                    RightMargin = Dp(12)
-                };
-                tabCell.AddView(settingsUpdateDot, dotLp);
-                navRow.AddView(tabCell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-            } else {
-                navRow.AddView(cell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-            }
+            navRow.AddView(cell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         }
         navLayer.AddView(navRow, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         navFrostedHost.AddView(navLayer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        // Persistent Frosted Mini-Player docked cleanly above the 3-tab capsule
+        FrameLayout.LayoutParams miniPlayerLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            Gravity = GravityFlags.Bottom | GravityFlags.CenterHorizontal,
+            LeftMargin = Dp(14),
+            RightMargin = Dp(14),
+            BottomMargin = Dp(76)
+        };
+        rootFrame.AddView(BuildPersistentMiniPlayerBar(contentFrame), miniPlayerLp);
 
         FrameLayout.LayoutParams floatingNavLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             Gravity = GravityFlags.Bottom | GravityFlags.CenterHorizontal,
@@ -817,14 +801,20 @@ public partial class MainActivity : Activity, ICavernizeApp {
         };
         rootFrame.AddView(navFrostedHost, floatingNavLp);
 
+        // Full-Screen Now Playing Sheet Overlay (Cover | Lyrics | 3D Stage) above all main chrome
+        rootFrame.AddView(BuildNowPlayingSheetOverlay(stage3dTab), new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.MatchParent));
+
         SetContentView(rootFrame);
         ConfigureEdgeToEdgeWindow(Window);
         rootFrame.SetOnApplyWindowInsetsListener(new RootInsetsListener(ApplyWindowInsets));
         ApplyCurrentWindowInsetsPadding();
         rootFrame.RequestApplyInsets();
         UpdateTabButtonStyles(animate: false);
-        UpdateWorkspaceChromeVisibility(activeTab != 0, animate: false);
-        SetBottomNavBarVisible(activeTab != 0 || isLibrarySectionOpen, animate: false);
+        UpdateTopShellHeaderTitle();
+        SetBottomNavBarVisible(true, animate: false);
+        RefreshMiniPlayerUi();
         SyncPredictiveBackRegistration();
         navFrostedHost.Post(() => navFrostedHost?.ScheduleDeferredBlur(220));
         RefreshAllUiState();
@@ -900,15 +890,16 @@ public partial class MainActivity : Activity, ICavernizeApp {
         int scrollBottom = Math.Max(insetBarsBottomPx, insetImeBottomPx);
         bool imeOpen = insetImeBottomPx > insetBarsBottomPx + Dp(48);
         if (musicTabRootPage != null) {
-            musicTabRootPage.SetPadding(
-                Dp(20),
-                Dp(6),
-                Dp(20),
-                isLibrarySectionOpen ? 0 : Dp(10) + insetBarsBottomPx);
-            UpdatePlayTabSpacingForViewport(force: true);
+            musicTabRootPage.SetPadding(Dp(16), Dp(2), Dp(16), 0);
+        }
+        if (nowPlayingSheetHost != null) {
+            nowPlayingSheetHost.SetPadding(insetLeftPx, insetTopPx, insetRightPx, insetBarsBottomPx);
+            if (isNowPlayingSheetOpen && activeNowPlayingSubView != 2) {
+                UpdatePlayTabSpacingForViewport(force: true);
+            }
         }
         if (musicLibraryScrollView != null) {
-            musicLibraryScrollView.SetPadding(0, 0, 0, Dp(106) + scrollBottom);
+            musicLibraryScrollView.SetPadding(0, 0, 0, Dp(162) + scrollBottom);
         }
         if (workspaceChromeHost != null) {
             int cutoutL = 0;
@@ -928,8 +919,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 if (page == null) {
                     continue;
                 }
-                int topDp = i == 4 ? 2 : 4;
-                page.SetPadding(Dp(14), Dp(topDp), Dp(14), Dp(116) + scrollBottom);
+                int topDp = 4;
+                page.SetPadding(Dp(14), Dp(topDp), Dp(14), Dp(166) + scrollBottom);
             }
         }
         if (bottomScrimView?.LayoutParameters is FrameLayout.LayoutParams scrimLp) {
@@ -937,6 +928,25 @@ public partial class MainActivity : Activity, ICavernizeApp {
             if (scrimLp.Height != targetH) {
                 scrimLp.Height = targetH;
                 bottomScrimView.LayoutParameters = scrimLp;
+            }
+        }
+        if (miniPlayerBarHost?.LayoutParameters is FrameLayout.LayoutParams mpLp) {
+            int mpLeft = Dp(14) + insetLeftPx;
+            int mpRight = Dp(14) + insetRightPx;
+            int mpBottom = Dp(76) + scrollBottom;
+            if (mpLp.LeftMargin != mpLeft || mpLp.RightMargin != mpRight || mpLp.BottomMargin != mpBottom) {
+                mpLp.LeftMargin = mpLeft;
+                mpLp.RightMargin = mpRight;
+                mpLp.BottomMargin = mpBottom;
+                miniPlayerBarHost.LayoutParameters = mpLp;
+            }
+        }
+        if (miniPlayerBarHost != null) {
+            bool showMini = isBottomNavVisible && !isNowPlayingSheetOpen && !imeOpen;
+            ViewStates mpTarget = showMini ? ViewStates.Visible : ViewStates.Gone;
+            if (miniPlayerBarHost.Visibility != mpTarget) {
+                miniPlayerBarHost.Visibility = mpTarget;
+                miniPlayerBarHost.Alpha = showMini ? 1f : 0f;
             }
         }
         if (navFrostedHost?.LayoutParameters is FrameLayout.LayoutParams navLp) {
@@ -980,9 +990,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     bool HasInternalBackStep() =>
         fullscreenVideoDlg != null ||
-        (activeTab == 0 && !isLibrarySectionOpen && musicStageMode == PlayerStageMode.Lyrics) ||
-        (activeTab == 0 && isLibrarySectionOpen) ||
-        (activeTab == 4 && HasSettingsInternalBackStep()) ||
+        isNowPlayingSheetOpen ||
+        (activeTab == 1 && HasSettingsInternalBackStep()) ||
+        (activeTab == 0 && (!string.IsNullOrEmpty(librarySearchQuery) || selectedLibraryAlbum != null || selectedLibraryFolder != null || !string.IsNullOrEmpty(selectedLibraryArtist))) ||
         activeTab != 0;
 
     bool TryHandleInternalBack() => HandleInternalBackStep();
@@ -995,15 +1005,19 @@ public partial class MainActivity : Activity, ICavernizeApp {
             ExitVideoFullscreenIfNeeded();
             return true;
         }
-        if (activeTab == 4 && TryHandleSettingsBackStep()) {
+        if (isNowPlayingSheetOpen) {
+            if (activeNowPlayingSubView != 0) {
+                SelectNowPlayingSubView(0);
+            } else {
+                CloseNowPlayingSheet();
+            }
+            return true;
+        }
+        if (activeTab == 1 && TryHandleSettingsBackStep()) {
             SyncPredictiveBackRegistration();
             return true;
         }
-        if (activeTab == 0 && !isLibrarySectionOpen && musicStageMode == PlayerStageMode.Lyrics) {
-            SetPlayerStageMode(PlayerStageMode.Cover);
-            return true;
-        }
-        if (activeTab == 0 && isLibrarySectionOpen) {
+        if (activeTab == 0) {
             if (!string.IsNullOrEmpty(librarySearchQuery)) {
                 librarySearchQuery = "";
                 libraryRenderLimit = 72;
@@ -1012,6 +1026,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 } else {
                     RenderLibraryView();
                 }
+                SyncPredictiveBackRegistration();
                 return true;
             }
             if (selectedLibraryAlbum != null || selectedLibraryFolder != null || !string.IsNullOrEmpty(selectedLibraryArtist)) {
@@ -1019,10 +1034,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 selectedLibraryFolder = null;
                 selectedLibraryArtist = null;
                 RenderLibraryView();
+                SyncPredictiveBackRegistration();
                 return true;
             }
-            SetMusicPlayerSection(openLibrary: false);
-            return true;
         }
         if (activeTab != 0) {
             SwitchTab(0);

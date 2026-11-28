@@ -21,7 +21,7 @@ public partial class MainActivity {
     readonly List<(int modeIdx, LinearLayout row, View radioDot, TextView title, TextView subtitle)> extractModeRows = [];
     readonly List<Button> extractBitButtons = [];
 
-    CheckBox extractJsonCheck, extractResidualCheck;
+    OneUiSwitch extractJsonCheck, extractResidualCheck;
     LinearLayout extractBitSection, extractJsonCheckWrap, extractResidualCheckWrap, extractSelectionSection;
     LinearLayout extractAiChainCard, extractBadgeRow;
     TextView extractAiChainSummaryText;
@@ -30,13 +30,19 @@ public partial class MainActivity {
     Button extractBtn, cancelExtractBtn;
     ProgressBar extractProgressBar;
     TextView extractStatusText;
-    readonly List<(int index, CheckBox box)> extractCheckboxes = [];
+    readonly List<(int index, OneUiSwitch box)> extractCheckboxes = [];
     bool pendingAutoResumeExtractAfterTrueHD;
     CavernizeTrack pendingTrueHDExtractTrack;
 
     LinearLayout BuildExtractorTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
         ApplyTabPageCutoutPadding(page);
+        page.AddView(BuildExtractorTabContent());
+        return page;
+    }
+
+    LinearLayout BuildExtractorTabContent() {
+        LinearLayout page = new(this) { Orientation = Orientation.Vertical };
 
         // WorkspaceSourceBar is hoisted stationary above contentFrame across non-Play tabs
         LinearLayout card = Card(S["ExtractTitle"], OneUiIconType.Scissors, OneUiTheme.IconStemsCalib);
@@ -71,9 +77,11 @@ public partial class MainActivity {
 
         for (int g = 0; g < goalGroups.Length; g++) {
             var (goalHeader, items) = goalGroups[g];
+            if (g > 0) {
+                AddDivider(card);
+            }
             LinearLayout goalCard = new(this) { Orientation = Orientation.Vertical };
-            goalCard.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 20f);
-            goalCard.SetPadding(Dp(12), Dp(8), Dp(12), Dp(6));
+            goalCard.SetPadding(Dp(2), Dp(4), Dp(2), Dp(4));
 
             TextView goalHdrTv = Label(goalHeader, 11.3f, OneUiTheme.PeachText);
             goalHdrTv.Typeface = OneUiTheme.GetAppleFontBold(this);
@@ -191,25 +199,23 @@ public partial class MainActivity {
         RefreshExtractBitButtonsUi();
 
         // Mode 0 only: 3D object trajectory metadata (.json)
-        extractJsonCheck = new CheckBox(this) {
+        extractJsonCheck = new OneUiSwitch(this) {
             Text = S["ExportJsonCheck"],
             Checked = true,
             TextSize = 12.5f
         };
         extractJsonCheck.SetTextColor(ColText);
-        extractJsonCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
-        extractJsonCheckWrap = WrapControlWithHelp(extractJsonCheck, S["ExportJsonCheck"], S["TipExtractJson"], bottomMarginDp: 4);
+                extractJsonCheckWrap = WrapControlWithHelp(extractJsonCheck, S["ExportJsonCheck"], S["TipExtractJson"], bottomMarginDp: 4);
         card.AddView(extractJsonCheckWrap);
 
         // Mode 6 only: Dedicated Atmos-exclusive residual stem toggle (never hijacking extractJsonCheck!)
-        extractResidualCheck = new CheckBox(this) {
+        extractResidualCheck = new OneUiSwitch(this) {
             Text = S["ExportResidualTrackCheck"],
             Checked = true,
             TextSize = 12.5f
         };
         extractResidualCheck.SetTextColor(ColText);
-        extractResidualCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
-        extractResidualCheckWrap = WrapControlWithHelp(extractResidualCheck, S["ExportResidualTrackCheck"], S["TipExtractResidual"], bottomMarginDp: 4);
+                extractResidualCheckWrap = WrapControlWithHelp(extractResidualCheck, S["ExportResidualTrackCheck"], S["TipExtractResidual"], bottomMarginDp: 4);
         card.AddView(extractResidualCheckWrap);
 
         // Modes 0..2 only: Quick selection pills & per-channel/object checklist
@@ -416,14 +422,13 @@ public partial class MainActivity {
             extractorChecklistContainer.AddView(Label(S["NoTrack"], 12f, ColMuted));
         } else {
             foreach (TrackSourceItem item in trackSourceItems) {
-                CheckBox cb = new(this) {
+                OneUiSwitch cb = new(this) {
                     Text = item.Name,
                     Checked = true,
                     TextSize = 12.5f
                 };
                 cb.SetTextColor(item.IsDynamicObject ? OneUiTheme.DynamicObject : ColText);
-                cb.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(item.IsDynamicObject ? OneUiTheme.DynamicObject : ColAccent);
-                extractorChecklistContainer.AddView(cb);
+                                extractorChecklistContainer.AddView(cb);
                 extractCheckboxes.Add((item.Index, cb));
             }
         }

@@ -35,6 +35,9 @@ namespace CavernizeAndroid;
 
 public partial class MainActivity {
     OneUiInlineSelector neuralQuantModeSelector;
+    LinearLayout neuralProSection, neuralCacheDetailsSection, karaokeDetailsSection, lgsrDetailsSection;
+    OneUiIconView neuralProChevron;
+    bool isNeuralProExpanded;
     Switch neuralQnnCtxCacheSwitch;
     TextView neuralSocCacheStatusText;
     Button neuralClearQnnCacheBtn;
@@ -55,81 +58,20 @@ public partial class MainActivity {
         neuralRuntimeStatusText.SetPadding(0, 0, 0, Dp(8));
         slot2bCard.AddView(neuralRuntimeStatusText);
 
-        neuralRuntimeCheckBtn = PillButton(S["NeuralRuntimeCheckBtn"], () => _ = CheckOnnxRuntimeUpdateAsync(silent: false));
-        slot2bCard.AddView(neuralRuntimeCheckBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        neuralModelPickerBtn = PillButton(BuildActiveAiPickerSummaryText(), () => ShowUnifiedAiModelPickerDialog());
+        neuralModelPickerBtn.TextSize = 11.4f;
+        neuralModelPickerBtn.SetSingleLine(true);
+        neuralModelPickerBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        slot2bCard.AddView(neuralModelPickerBtn, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
 
-        neuralModelsBtn = PillButton(string.Format(S["NeuralModelsBtn"], 0), ShowNeuralModelsModal);
-        slot2bCard.AddView(neuralModelsBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(8),
-            BottomMargin = Dp(6)
-        });
+        neuralPlanSummaryText = Label("", 11.5f, OneUiTheme.TextSub);
+        neuralPlanSummaryText.SetSingleLine(true);
+        neuralPlanSummaryText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        neuralPlanSummaryText.SetPadding(Dp(2), 0, Dp(2), Dp(6));
+        slot2bCard.AddView(neuralPlanSummaryText);
 
         AddDivider(slot2bCard);
-
-        neuralProviderSelector = new OneUiInlineSelector(this, S["NeuralProviderTitle"]);
-        string[] providerLabels = [
-            S["NeuralProviderAuto"],
-            S["NeuralProviderQnn"],
-            S["NeuralProviderXnnpack"],
-            S["NeuralProviderCpu"],
-            S["NeuralProviderWebGpu"]
-        ];
-        neuralProviderSelector.SetItems(providerLabels, Math.Clamp(store.NeuralProviderIndex, 0, providerLabels.Length - 1));
-        neuralProviderSelector.SelectionChanged += pos => {
-            store.NeuralProviderIndex = pos;
-            ApplyAndRefreshNeuralAudio();
-        };
-        slot2bCard.AddView(WrapControlWithHelp(neuralProviderSelector, S["NeuralProviderTitle"].TrimEnd(':'), S["TipNeuralProvider"], bottomMarginDp: 6));
-
-        // Wave E (W53.5 / B12): Mobile ONNX Precision (Auto / FP32 / FP16 / W8A16) & SoC-Keyed QNN Context Binary Cache
-        neuralQuantModeSelector = new OneUiInlineSelector(this, S["NeuralQuantModeTitle"]);
-        string[] quantLabels = [
-            S["NeuralQuantAuto"],
-            S["NeuralQuantFp32"],
-            S["NeuralQuantFp16"],
-            S["NeuralQuantW8A16"]
-        ];
-        neuralQuantModeSelector.SetItems(quantLabels, Math.Clamp(store.NeuralQuantizationModeIndex, 0, quantLabels.Length - 1));
-        neuralQuantModeSelector.SelectionChanged += pos => {
-            store.NeuralQuantizationModeIndex = pos;
-            if (neuralRuntime != null) {
-                neuralRuntime.PreferredQuantizationMode = (Cavernize.Logic.Spatial.NeuralQuantizationMode)Math.Clamp(pos, 0, 3);
-            }
-            RefreshNeuralAudioUi();
-        };
-        slot2bCard.AddView(WrapControlWithHelp(neuralQuantModeSelector, S["NeuralQuantModeTitle"].TrimEnd(':'), S["TipNeuralQuantMode"], bottomMarginDp: 4));
-
-        neuralQnnCtxCacheSwitch = AddSwitchRow(slot2bCard, S["NeuralQnnCacheTitle"], store.NeuralQnnContextCacheEnabled, v => {
-            store.NeuralQnnContextCacheEnabled = v;
-            if (neuralRuntime != null) {
-                neuralRuntime.QnnContextCacheEnabled = v;
-            }
-            RefreshNeuralAudioUi();
-        }, helpBody: S["TipNeuralQnnCache"]);
-
-        neuralSocCacheStatusText = Label("", 11.2f, OneUiTheme.TextSub);
-        neuralSocCacheStatusText.SetPadding(Dp(2), 0, Dp(2), Dp(4));
-        slot2bCard.AddView(neuralSocCacheStatusText);
-
-        neuralClearQnnCacheBtn = PillButton(S["NeuralQnnCacheClearBtn"], () => {
-            ConfirmDestructiveAction(
-                S["ConfirmDeleteTitle"],
-                S["ConfirmClearQnnCacheMsg"],
-                () => {
-                    _ = Task.Run(() => {
-                        int removed = OnnxQnnContextCacheManager.ClearAllCaches(this);
-                        if (!uiDestroyed) {
-                            RunOnUiThread(() => {
-                                ShowToast(string.Format(S["NeuralQnnCacheClearedToast"], removed));
-                                RefreshNeuralAudioUi();
-                            });
-                        }
-                    });
-                });
-        });
-        slot2bCard.AddView(neuralClearQnnCacheBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
 
         neuralExecBackendSelector = new OneUiInlineSelector(this, S["NeuralExecBackendTitle"]);
         string[] backendLabels = [
@@ -156,211 +98,7 @@ public partial class MainActivity {
             BottomMargin = Dp(8)
         });
 
-        neuralComputeBudgetSelector = new OneUiInlineSelector(this, S["NeuralComputeBudgetTitle"]);
-        string[] computeBudgetLabels = [
-            S["NeuralComputeBudgetEco"],
-            S["NeuralComputeBudgetBalanced"],
-            S["NeuralComputeBudgetFast"]
-        ];
-        neuralComputeBudgetSelector.SetItems(computeBudgetLabels, Math.Clamp(store.AiComputeBudgetTier, 0, computeBudgetLabels.Length - 1));
-        neuralComputeBudgetSelector.SelectionChanged += pos => {
-            store.AiComputeBudgetTier = pos;
-            RefreshNeuralAudioUi();
-        };
-        slot2bCard.AddView(WrapControlWithHelp(neuralComputeBudgetSelector, S["NeuralComputeBudgetTitle"], S["TipNeuralComputeBudget"], bottomMarginDp: 8));
-
-        AddDivider(slot2bCard);
-
-        neuralOrchestrationSelector = new OneUiInlineSelector(this, S["NeuralOrchestrationTitle"]);
-        string[] orchLabels = [
-            S["NeuralOrchestrationAuto"],
-            S["NeuralOrchestrationManual"]
-        ];
-        neuralOrchestrationSelector.SetItems(orchLabels, Math.Clamp(store.NeuralOrchestrationModeIndex, 0, orchLabels.Length - 1));
-        neuralOrchestrationSelector.SelectionChanged += pos => {
-            if (IsCoordinatorUpdating) return;
-            store.NeuralOrchestrationModeIndex = pos;
-            ApplyAndRefreshNeuralAudio();
-        };
-        slot2bCard.AddView(WrapControlWithHelp(neuralOrchestrationSelector, S["NeuralOrchestrationTitle"], S["TipNeuralOrchestration"], bottomMarginDp: 4));
-
-        neuralStudioBundleSelector = new OneUiInlineSelector(this, S["NeuralStudioBundleTitle"]);
-        string[] bundleLabels = [
-            S["StudioBundleFastSingle"],
-            S["StudioBundleVocalEnsemble"],
-            S["StudioBundlePureInstrumental"],
-            S["StudioBundleFullBand6Stem"],
-            S["StudioBundleKaraoke2Stage"]
-        ];
-        neuralStudioBundleSelector.SetItems(bundleLabels, Math.Clamp(store.NeuralStudioBundleIndex, 0, bundleLabels.Length - 1));
-        neuralStudioBundleSelector.SelectionChanged += pos => {
-            if (IsCoordinatorUpdating) return;
-            store.NeuralStudioBundleIndex = pos;
-            ApplyAndRefreshNeuralAudio();
-            RefreshStudioW12ContextUi();
-        };
-        slot2bCard.AddView(WrapControlWithHelp(neuralStudioBundleSelector, S["NeuralStudioBundleTitle"], S["TipNeuralStudioBundle"], bottomMarginDp: 4));
-
-        neuralModelPickerBtn = PillButton(BuildActiveAiPickerSummaryText(), () => ShowUnifiedAiModelPickerDialog());
-        neuralModelPickerBtn.TextSize = 11.4f;
-        neuralModelPickerBtn.SetSingleLine(true);
-        neuralModelPickerBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        slot2bCard.AddView(neuralModelPickerBtn, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
-
-        neuralPlanSummaryText = Label("", 11.5f, OneUiTheme.TextSub);
-        neuralPlanSummaryText.SetSingleLine(true);
-        neuralPlanSummaryText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        neuralPlanSummaryText.SetPadding(Dp(2), 0, Dp(2), Dp(6));
-        slot2bCard.AddView(neuralPlanSummaryText);
-
-        AddDivider(slot2bCard);
-
-        neuralTrackCacheEnabledSwitch = AddSwitchRow(slot2bCard, S["NeuralTrackCacheAutoTitle"], store.NeuralTrackCacheEnabled, v => {
-            store.NeuralTrackCacheEnabled = v;
-            if (neuralTrackCache != null) {
-                neuralTrackCache.IsEnabled = v;
-            }
-            ApplyAndRefreshNeuralAudio();
-        }, helpBody: S["TipNeuralTrackCache"]);
-
-        neuralTrackCacheCompSelector = new OneUiInlineSelector(this, S["NeuralTrackCacheCompTitle"]);
-        string[] cacheCompLabels = [
-            S["NeuralTrackCacheComp16"],
-            S["NeuralTrackCacheComp24"],
-            S["NeuralTrackCacheCompRaw"]
-        ];
-        neuralTrackCacheCompSelector.SetItems(cacheCompLabels, Math.Clamp(store.NeuralTrackCacheCompressionIndex, 0, cacheCompLabels.Length - 1));
-        neuralTrackCacheCompSelector.SelectionChanged += pos => {
-            store.NeuralTrackCacheCompressionIndex = pos;
-            if (neuralTrackCache != null) {
-                neuralTrackCache.CompressionMode = (Cavernize.Logic.Spatial.NeuralTrackCacheCompressionMode)pos;
-            }
-            ApplyAndRefreshNeuralAudio();
-        };
-        slot2bCard.AddView(WrapControlWithHelp(neuralTrackCacheCompSelector, S["NeuralTrackCacheCompTitle"].TrimEnd(':'), S["TipNeuralTrackCacheComp"], bottomMarginDp: 6));
-
-        neuralTrackCacheCapSelector = new OneUiInlineSelector(this, S["NeuralTrackCacheCapTitle"]);
-        string[] cacheCapLabels = ["256 MB", "512 MB", "1024 MB", "2048 MB", "4096 MB"];
-        neuralTrackCacheCapSelector.SetItems(cacheCapLabels, ResolveNeuralTrackCachePresetIndex(store.NeuralTrackCacheMaxMb));
-        neuralTrackCacheCapSelector.SelectionChanged += pos => {
-            int mb = NeuralTrackCachePresetsMb[Math.Clamp(pos, 0, NeuralTrackCachePresetsMb.Length - 1)];
-            ApplyNeuralTrackCacheMaxMb(mb);
-        };
-        slot2bCard.AddView(neuralTrackCacheCapSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(4)
-        });
-
-        neuralTrackCacheSavingsText = Label("", 11.4f, OneUiTheme.IconSystemInfo);
-        neuralTrackCacheSavingsText.SetPadding(Dp(2), 0, Dp(2), Dp(6));
-        slot2bCard.AddView(neuralTrackCacheSavingsText);
-
-        neuralBrowseTrackCacheBtn = PillButton(S["NeuralCacheBrowserBtn"], ShowNeuralTrackCacheBrowserModal);
-        slot2bCard.AddView(neuralBrowseTrackCacheBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
-
-        AddDivider(slot2bCard);
-
-        (neuralOverlapBar, _) = AddSliderRow(
-            slot2bCard,
-            S["NeuralOverlapTitle"],
-            2,
-            8,
-            Math.Clamp(store.NeuralOverlapFactor, 2, 8),
-            v => {
-                store.NeuralOverlapFactor = v;
-                if (neuralOverlapBar != null) {
-                    neuralOverlapBar.ValueText = $"{v}x";
-                    neuralOverlapBar.Invalidate();
-                }
-                ApplyAndRefreshNeuralAudio();
-            },
-            "x",
-            defaultValue: 2,
-            helpBody: S["TipMvsepOverlap"]);
-        if (neuralOverlapBar != null) {
-            neuralOverlapBar.ValueText = $"{store.NeuralOverlapFactor}x";
-        }
-
-        neuralTtaSwitch = AddSwitchRow(slot2bCard, S["NeuralTtaTitle"], store.NeuralTtaEnabled, v => {
-            store.NeuralTtaEnabled = v;
-            ApplyAndRefreshNeuralAudio();
-        }, helpBody: S["TipMvsepTta"]);
-        AddDivider(slot2bCard);
-
-        neuralEnsembleSelector = new OneUiInlineSelector(this, S["NeuralEnsembleTitle"]);
-        string[] ensembleLabels = [
-            S["NeuralEnsembleAvgWave"],
-            S["NeuralEnsembleMinFft"],
-            S["NeuralEnsembleAvgFft"]
-        ];
-        neuralEnsembleSelector.SetItems(ensembleLabels, Math.Clamp(store.NeuralEnsembleModeIndex, 0, ensembleLabels.Length - 1));
-        neuralEnsembleSelector.SelectionChanged += pos => {
-            store.NeuralEnsembleModeIndex = pos;
-            ApplyAndRefreshNeuralAudio();
-        };
-        slot2bCard.AddView(WrapControlWithHelp(neuralEnsembleSelector, S["NeuralEnsembleTitle"].TrimEnd(':'), S["TipNeuralEnsemble"], bottomMarginDp: 6));
-
-        neuralPhaseFixSwitch = AddSwitchRow(slot2bCard, S["NeuralPhaseFixTitle"], store.NeuralPhaseFixEnabled, v => {
-            store.NeuralPhaseFixEnabled = v;
-            ApplyAndRefreshNeuralAudio();
-        }, helpBody: S["TipMvsepPhaseFix"]);
-        AddDivider(slot2bCard);
-
-        neuralConservationSwitch = AddSwitchRow(slot2bCard, S["NeuralConservationTitle"], store.NeuralEnergyConservation, v => {
-            store.NeuralEnergyConservation = v;
-            ApplyAndRefreshNeuralAudio();
-        }, helpBody: S["TipNeuralConservation"]);
-        AddDivider(slot2bCard);
-
-        spatialKaraokeSwitch = AddSwitchRow(slot2bCard, S["SpatialKaraokeTitle"], store.SpatialKaraokeEnabled, v => {
-            store.SpatialKaraokeEnabled = v;
-            if (!v && store.KaraokeVocalLevel < 0.99f) {
-                // Keep vocal slider coherent when explicitly disabling Karaoke
-                store.KaraokeVocalLevel = 1.0f;
-                if (karaokeVocalLevelBar != null && karaokeVocalLevelBar.Progress != 100) {
-                    karaokeVocalLevelBar.Progress = 100;
-                    karaokeVocalLevelBar.Invalidate();
-                }
-            } else if (v && store.KaraokeVocalLevel >= 0.99f) {
-                // Turning Karaoke ON from 100% defaults to 0% vocal so user immediately hears attenuation
-                store.KaraokeVocalLevel = 0.0f;
-                if (karaokeVocalLevelBar != null && karaokeVocalLevelBar.Progress != 0) {
-                    karaokeVocalLevelBar.Progress = 0;
-                    karaokeVocalLevelBar.Invalidate();
-                }
-            }
-            ApplyAndRefreshNeuralAudio();
-            RefreshLyricsSingDockUi();
-            RefreshStudioW12ContextUi();
-        }, helpBody: S["TipSpatialKaraoke"]);
-
-        (karaokeVocalLevelBar, _) = AddSliderRow(
-            slot2bCard,
-            S["KaraokeVocalLevelTitle"],
-            0,
-            100,
-            Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100),
-            v => {
-                ApplyLyricsSingVocalLevel(v);
-            },
-            "%",
-            defaultValue: 100);
-
-        karaokePreserveBackingSwitch = AddSwitchRow(slot2bCard, S["KaraokePreserveBackingTitle"], store.KaraokePreserveBackingVocals, v => {
-            store.KaraokePreserveBackingVocals = v;
-            ApplyAndRefreshNeuralAudio();
-            RefreshLyricsSingDockUi();
-            RefreshStudioW12ContextUi();
-        }, helpBody: S["TipKaraokePureInstrumental"]);
-        AddDivider(slot2bCard);
-
-        karaokeLosslessTwinSwitch = AddSwitchRow(slot2bCard, S["KaraokeLosslessTwinTitle"], store.UseLosslessTwinForKaraoke, v => {
-            store.UseLosslessTwinForKaraoke = v;
-            ApplyAndRefreshNeuralAudio();
-        }, helpBody: S["TipKaraokeLosslessTwin"]);
-        AddDivider(slot2bCard);
+AddDivider(slot2bCard);
 
         neuralUpmixModeSelector = new OneUiInlineSelector(this, S["NeuralUpmixModeTitle"]);
         string[] upmixModeLabels = [
@@ -382,6 +120,308 @@ public partial class MainActivity {
         };
         slot2bCard.AddView(WrapControlWithHelp(neuralUpmixModeSelector, S["NeuralUpmixModeTitle"], S["TipNeuralUpmix"], bottomMarginDp: 2));
 
+
+        AddDivider(slot2bCard);
+        spatialKaraokeSwitch = AddSwitchRow(slot2bCard, S["SpatialKaraokeTitle"], store.SpatialKaraokeEnabled, v => {
+            store.SpatialKaraokeEnabled = v;
+            if (!v && store.KaraokeVocalLevel < 0.99f) {
+                // Keep vocal slider coherent when explicitly disabling Karaoke
+                store.KaraokeVocalLevel = 1.0f;
+                if (karaokeVocalLevelBar != null && karaokeVocalLevelBar.Progress != 100) {
+                    karaokeVocalLevelBar.Progress = 100;
+                    karaokeVocalLevelBar.Invalidate();
+        karaokeDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
+                }
+            } else if (v && store.KaraokeVocalLevel >= 0.99f) {
+                // Turning Karaoke ON from 100% defaults to 0% vocal so user immediately hears attenuation
+                store.KaraokeVocalLevel = 0.0f;
+                if (karaokeVocalLevelBar != null && karaokeVocalLevelBar.Progress != 0) {
+                    karaokeVocalLevelBar.Progress = 0;
+                    karaokeVocalLevelBar.Invalidate();
+                }
+            }
+            ApplyAndRefreshNeuralAudio();
+            RefreshLyricsSingDockUi();
+            RefreshStudioW12ContextUi();
+        }, helpBody: S["TipSpatialKaraoke"]);
+
+        (karaokeVocalLevelBar, _) = AddSliderRow(
+            karaokeDetailsSection,
+            S["KaraokeVocalLevelTitle"],
+            0,
+            100,
+            Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100),
+            v => {
+                ApplyLyricsSingVocalLevel(v);
+            },
+            "%",
+            defaultValue: 100);
+
+        karaokePreserveBackingSwitch = AddSwitchRow(karaokeDetailsSection, S["KaraokePreserveBackingTitle"], store.KaraokePreserveBackingVocals, v => {
+            store.KaraokePreserveBackingVocals = v;
+            ApplyAndRefreshNeuralAudio();
+            RefreshLyricsSingDockUi();
+            RefreshStudioW12ContextUi();
+        }, helpBody: S["TipKaraokePureInstrumental"]);
+        AddDivider(karaokeDetailsSection);
+
+        karaokeLosslessTwinSwitch = AddSwitchRow(karaokeDetailsSection, S["KaraokeLosslessTwinTitle"], store.UseLosslessTwinForKaraoke, v => {
+            store.UseLosslessTwinForKaraoke = v;
+            ApplyAndRefreshNeuralAudio();
+        }, helpBody: S["TipKaraokeLosslessTwin"]);
+        
+        slot2bCard.AddView(karaokeDetailsSection);
+        AddDivider(slot2bCard);
+        neuralTrackCacheEnabledSwitch = AddSwitchRow(slot2bCard, S["NeuralTrackCacheAutoTitle"], store.NeuralTrackCacheEnabled, v => {
+            store.NeuralTrackCacheEnabled = v;
+            if (neuralTrackCache != null) {
+                neuralTrackCache.IsEnabled = v;
+            }
+            ApplyAndRefreshNeuralAudio();
+        }, helpBody: S["TipNeuralTrackCache"]);
+
+
+        neuralCacheDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };        neuralTrackCacheCompSelector = new OneUiInlineSelector(this, S["NeuralTrackCacheCompTitle"]);
+        string[] cacheCompLabels = [
+            S["NeuralTrackCacheComp16"],
+            S["NeuralTrackCacheComp24"],
+            S["NeuralTrackCacheCompRaw"]
+        ];
+        neuralTrackCacheCompSelector.SetItems(cacheCompLabels, Math.Clamp(store.NeuralTrackCacheCompressionIndex, 0, cacheCompLabels.Length - 1));
+        neuralTrackCacheCompSelector.SelectionChanged += pos => {
+            store.NeuralTrackCacheCompressionIndex = pos;
+            if (neuralTrackCache != null) {
+                neuralTrackCache.CompressionMode = (Cavernize.Logic.Spatial.NeuralTrackCacheCompressionMode)pos;
+            }
+            ApplyAndRefreshNeuralAudio();
+        };
+        neuralCacheDetailsSection.AddView(WrapControlWithHelp(neuralTrackCacheCompSelector, S["NeuralTrackCacheCompTitle"].TrimEnd(':'), S["TipNeuralTrackCacheComp"], bottomMarginDp: 6));
+
+        neuralTrackCacheCapSelector = new OneUiInlineSelector(this, S["NeuralTrackCacheCapTitle"]);
+        string[] cacheCapLabels = ["256 MB", "512 MB", "1024 MB", "2048 MB", "4096 MB"];
+        neuralTrackCacheCapSelector.SetItems(cacheCapLabels, ResolveNeuralTrackCachePresetIndex(store.NeuralTrackCacheMaxMb));
+        neuralTrackCacheCapSelector.SelectionChanged += pos => {
+            int mb = NeuralTrackCachePresetsMb[Math.Clamp(pos, 0, NeuralTrackCachePresetsMb.Length - 1)];
+            ApplyNeuralTrackCacheMaxMb(mb);
+        };
+        neuralCacheDetailsSection.AddView(neuralTrackCacheCapSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(4)
+        });
+
+        neuralTrackCacheSavingsText = Label("", 11.4f, OneUiTheme.IconSystemInfo);
+        neuralTrackCacheSavingsText.SetPadding(Dp(2), 0, Dp(2), Dp(6));
+        neuralCacheDetailsSection.AddView(neuralTrackCacheSavingsText);
+
+        neuralBrowseTrackCacheBtn = PillButton(S["NeuralCacheBrowserBtn"], ShowNeuralTrackCacheBrowserModal);
+        neuralCacheDetailsSection.AddView(neuralBrowseTrackCacheBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        
+        slot2bCard.AddView(neuralCacheDetailsSection);
+
+        AddDivider(slot2bCard);
+        LinearLayout neuralProHeader = HRow();
+        neuralProHeader.SetPadding(0, Dp(6), 0, Dp(6));
+        OneUiTheme.AttachRecoil(neuralProHeader, 0.98f);
+        neuralProHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Wrench, OneUiTheme.IconSystemInfo, 26));
+        TextView neuralProTitleTv = Label(S["NeuralProLabSectionTitle"], 12.6f, ColText);
+        neuralProTitleTv.Typeface = OneUiTheme.GetAppleFontBold(this);
+        neuralProTitleTv.SetPadding(Dp(8), 0, Dp(8), 0);
+        neuralProHeader.AddView(neuralProTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        neuralProChevron = new OneUiIconView(this, (isNeuralProExpanded || isSettingsProMode) ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown, OneUiTheme.PeachText);
+        neuralProHeader.AddView(neuralProChevron, new LinearLayout.LayoutParams(Dp(16), Dp(16)));
+        slot2bCard.AddView(neuralProHeader);
+
+        neuralProSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = (isNeuralProExpanded || isSettingsProMode) ? ViewStates.Visible : ViewStates.Gone
+        };
+        neuralProSection.SetPadding(0, Dp(6), 0, 0);
+        neuralProHeader.Click += (_, _) => {
+            isNeuralProExpanded = !isNeuralProExpanded;
+            SetExpandedWithAnimation(neuralProSection, isNeuralProExpanded);
+            if (neuralProChevron != null) {
+                neuralProChevron.IconType = isNeuralProExpanded ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
+            }
+        };
+        neuralRuntimeCheckBtn = PillButton(S["NeuralRuntimeCheckBtn"], () => _ = CheckOnnxRuntimeUpdateAsync(silent: false));
+        neuralProSection.AddView(neuralRuntimeCheckBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        neuralModelsBtn = PillButton(string.Format(S["NeuralModelsBtn"], 0), ShowNeuralModelsModal);
+        neuralProSection.AddView(neuralModelsBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(8),
+            BottomMargin = Dp(6)
+        });
+
+        AddDivider(neuralProSection);
+
+        neuralProviderSelector = new OneUiInlineSelector(this, S["NeuralProviderTitle"]);
+        string[] providerLabels = [
+            S["NeuralProviderAuto"],
+            S["NeuralProviderQnn"],
+            S["NeuralProviderXnnpack"],
+            S["NeuralProviderCpu"],
+            S["NeuralProviderWebGpu"]
+        ];
+        neuralProviderSelector.SetItems(providerLabels, Math.Clamp(store.NeuralProviderIndex, 0, providerLabels.Length - 1));
+        neuralProviderSelector.SelectionChanged += pos => {
+            store.NeuralProviderIndex = pos;
+            ApplyAndRefreshNeuralAudio();
+        };
+        neuralProSection.AddView(WrapControlWithHelp(neuralProviderSelector, S["NeuralProviderTitle"].TrimEnd(':'), S["TipNeuralProvider"], bottomMarginDp: 6));
+
+        // Wave E (W53.5 / B12): Mobile ONNX Precision (Auto / FP32 / FP16 / W8A16) & SoC-Keyed QNN Context Binary Cache
+        neuralQuantModeSelector = new OneUiInlineSelector(this, S["NeuralQuantModeTitle"]);
+        string[] quantLabels = [
+            S["NeuralQuantAuto"],
+            S["NeuralQuantFp32"],
+            S["NeuralQuantFp16"],
+            S["NeuralQuantW8A16"]
+        ];
+        neuralQuantModeSelector.SetItems(quantLabels, Math.Clamp(store.NeuralQuantizationModeIndex, 0, quantLabels.Length - 1));
+        neuralQuantModeSelector.SelectionChanged += pos => {
+            store.NeuralQuantizationModeIndex = pos;
+            if (neuralRuntime != null) {
+                neuralRuntime.PreferredQuantizationMode = (Cavernize.Logic.Spatial.NeuralQuantizationMode)Math.Clamp(pos, 0, 3);
+            }
+            RefreshNeuralAudioUi();
+        };
+        neuralProSection.AddView(WrapControlWithHelp(neuralQuantModeSelector, S["NeuralQuantModeTitle"].TrimEnd(':'), S["TipNeuralQuantMode"], bottomMarginDp: 4));
+
+        neuralQnnCtxCacheSwitch = AddSwitchRow(neuralProSection, S["NeuralQnnCacheTitle"], store.NeuralQnnContextCacheEnabled, v => {
+            store.NeuralQnnContextCacheEnabled = v;
+            if (neuralRuntime != null) {
+                neuralRuntime.QnnContextCacheEnabled = v;
+            }
+            RefreshNeuralAudioUi();
+        }, helpBody: S["TipNeuralQnnCache"]);
+
+        neuralSocCacheStatusText = Label("", 11.2f, OneUiTheme.TextSub);
+        neuralSocCacheStatusText.SetPadding(Dp(2), 0, Dp(2), Dp(4));
+        neuralProSection.AddView(neuralSocCacheStatusText);
+
+        neuralClearQnnCacheBtn = PillButton(S["NeuralQnnCacheClearBtn"], () => {
+            ConfirmDestructiveAction(
+                S["ConfirmDeleteTitle"],
+                S["ConfirmClearQnnCacheMsg"],
+                () => {
+                    _ = Task.Run(() => {
+                        int removed = OnnxQnnContextCacheManager.ClearAllCaches(this);
+                        if (!uiDestroyed) {
+                            RunOnUiThread(() => {
+                                ShowToast(string.Format(S["NeuralQnnCacheClearedToast"], removed));
+                                RefreshNeuralAudioUi();
+                            });
+                        }
+                    });
+                });
+        });
+        neuralProSection.AddView(neuralClearQnnCacheBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        neuralComputeBudgetSelector = new OneUiInlineSelector(this, S["NeuralComputeBudgetTitle"]);
+        string[] computeBudgetLabels = [
+            S["NeuralComputeBudgetEco"],
+            S["NeuralComputeBudgetBalanced"],
+            S["NeuralComputeBudgetFast"]
+        ];
+        neuralComputeBudgetSelector.SetItems(computeBudgetLabels, Math.Clamp(store.AiComputeBudgetTier, 0, computeBudgetLabels.Length - 1));
+        neuralComputeBudgetSelector.SelectionChanged += pos => {
+            store.AiComputeBudgetTier = pos;
+            RefreshNeuralAudioUi();
+        };
+        neuralProSection.AddView(WrapControlWithHelp(neuralComputeBudgetSelector, S["NeuralComputeBudgetTitle"], S["TipNeuralComputeBudget"], bottomMarginDp: 8));
+
+        AddDivider(neuralProSection);
+
+        neuralOrchestrationSelector = new OneUiInlineSelector(this, S["NeuralOrchestrationTitle"]);
+        string[] orchLabels = [
+            S["NeuralOrchestrationAuto"],
+            S["NeuralOrchestrationManual"]
+        ];
+        neuralOrchestrationSelector.SetItems(orchLabels, Math.Clamp(store.NeuralOrchestrationModeIndex, 0, orchLabels.Length - 1));
+        neuralOrchestrationSelector.SelectionChanged += pos => {
+            if (IsCoordinatorUpdating) return;
+            store.NeuralOrchestrationModeIndex = pos;
+            ApplyAndRefreshNeuralAudio();
+        };
+        neuralProSection.AddView(WrapControlWithHelp(neuralOrchestrationSelector, S["NeuralOrchestrationTitle"], S["TipNeuralOrchestration"], bottomMarginDp: 4));
+
+        neuralStudioBundleSelector = new OneUiInlineSelector(this, S["NeuralStudioBundleTitle"]);
+        string[] bundleLabels = [
+            S["StudioBundleFastSingle"],
+            S["StudioBundleVocalEnsemble"],
+            S["StudioBundlePureInstrumental"],
+            S["StudioBundleFullBand6Stem"],
+            S["StudioBundleKaraoke2Stage"]
+        ];
+        neuralStudioBundleSelector.SetItems(bundleLabels, Math.Clamp(store.NeuralStudioBundleIndex, 0, bundleLabels.Length - 1));
+        neuralStudioBundleSelector.SelectionChanged += pos => {
+            if (IsCoordinatorUpdating) return;
+            store.NeuralStudioBundleIndex = pos;
+            ApplyAndRefreshNeuralAudio();
+            RefreshStudioW12ContextUi();
+        };
+        neuralProSection.AddView(WrapControlWithHelp(neuralStudioBundleSelector, S["NeuralStudioBundleTitle"], S["TipNeuralStudioBundle"], bottomMarginDp: 4));
+
+AddDivider(neuralProSection);
+
+        (neuralOverlapBar, _) = AddSliderRow(
+            neuralProSection,
+            S["NeuralOverlapTitle"],
+            2,
+            8,
+            Math.Clamp(store.NeuralOverlapFactor, 2, 8),
+            v => {
+                store.NeuralOverlapFactor = v;
+                if (neuralOverlapBar != null) {
+                    neuralOverlapBar.ValueText = $"{v}x";
+                    neuralOverlapBar.Invalidate();
+                }
+                ApplyAndRefreshNeuralAudio();
+            },
+            "x",
+            defaultValue: 2,
+            helpBody: S["TipMvsepOverlap"]);
+        if (neuralOverlapBar != null) {
+            neuralOverlapBar.ValueText = $"{store.NeuralOverlapFactor}x";
+        }
+
+        neuralTtaSwitch = AddSwitchRow(neuralProSection, S["NeuralTtaTitle"], store.NeuralTtaEnabled, v => {
+            store.NeuralTtaEnabled = v;
+            ApplyAndRefreshNeuralAudio();
+        }, helpBody: S["TipMvsepTta"]);
+        AddDivider(neuralProSection);
+
+        neuralEnsembleSelector = new OneUiInlineSelector(this, S["NeuralEnsembleTitle"]);
+        string[] ensembleLabels = [
+            S["NeuralEnsembleAvgWave"],
+            S["NeuralEnsembleMinFft"],
+            S["NeuralEnsembleAvgFft"]
+        ];
+        neuralEnsembleSelector.SetItems(ensembleLabels, Math.Clamp(store.NeuralEnsembleModeIndex, 0, ensembleLabels.Length - 1));
+        neuralEnsembleSelector.SelectionChanged += pos => {
+            store.NeuralEnsembleModeIndex = pos;
+            ApplyAndRefreshNeuralAudio();
+        };
+        neuralProSection.AddView(WrapControlWithHelp(neuralEnsembleSelector, S["NeuralEnsembleTitle"].TrimEnd(':'), S["TipNeuralEnsemble"], bottomMarginDp: 6));
+
+        neuralPhaseFixSwitch = AddSwitchRow(neuralProSection, S["NeuralPhaseFixTitle"], store.NeuralPhaseFixEnabled, v => {
+            store.NeuralPhaseFixEnabled = v;
+            ApplyAndRefreshNeuralAudio();
+        }, helpBody: S["TipMvsepPhaseFix"]);
+        AddDivider(neuralProSection);
+
+        neuralConservationSwitch = AddSwitchRow(neuralProSection, S["NeuralConservationTitle"], store.NeuralEnergyConservation, v => {
+            store.NeuralEnergyConservation = v;
+            ApplyAndRefreshNeuralAudio();
+        }, helpBody: S["TipNeuralConservation"]);
+        AddDivider(neuralProSection);
+
+
+        slot2bCard.AddView(neuralProSection);
         RegisterSettingsCard(slot2bCard, categoryIndex: 2, isProOnly: false, "ai neural onnx runtime models orchestrator cache mb mvsep cloud api token bundle ensemble roformer instrumental stems karaoke qnn xnnpack webgpu compute headroom budget eco balanced fast thermal cpu");
 
         // Universal Lossless Twin & Lossless-Guided Atmos Restoration (LGSR)
@@ -402,14 +442,15 @@ public partial class MainActivity {
         lgsrEnabledSwitch = AddSwitchRow(slot2cCard, S["LgsrEnabledTitle"], store.LgsrEnabled, v => {
             store.LgsrEnabled = v;
             ApplyAndRefreshLgsr(rescanTwin: v);
+        lgsrDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         });
-        AddDivider(slot2cCard);
+        AddDivider(lgsrDetailsSection);
 
-        lgsrAutoDiscoverSwitch = AddSwitchRow(slot2cCard, S["LgsrAutoDiscoverTitle"], store.LgsrAutoDiscoverTwin, v => {
+        lgsrAutoDiscoverSwitch = AddSwitchRow(lgsrDetailsSection, S["LgsrAutoDiscoverTitle"], store.LgsrAutoDiscoverTwin, v => {
             store.LgsrAutoDiscoverTwin = v;
             ApplyAndRefreshLgsr(rescanTwin: v);
         });
-        AddDivider(slot2cCard);
+        AddDivider(lgsrDetailsSection);
 
         (lgsrFusionBar, _) = AddSliderRow(
             slot2cCard,
@@ -424,31 +465,31 @@ public partial class MainActivity {
             "%",
             defaultValue: 85);
 
-        lgsrEnvelopeLockSwitch = AddSwitchRow(slot2cCard, S["LgsrEnvelopeLockTitle"], store.LgsrDynamicEnvelopeLock, v => {
+        lgsrEnvelopeLockSwitch = AddSwitchRow(lgsrDetailsSection, S["LgsrEnvelopeLockTitle"], store.LgsrDynamicEnvelopeLock, v => {
             store.LgsrDynamicEnvelopeLock = v;
             ApplyAndRefreshLgsr(rescanTwin: false);
         }, helpBody: S["TipLgsrEnvelopeLock"]);
-        AddDivider(slot2cCard);
+        AddDivider(lgsrDetailsSection);
 
-        lgsrClippingGuardSwitch = AddSwitchRow(slot2cCard, S["LgsrClippingGuardTitle"], store.LgsrClippingGuard, v => {
+        lgsrClippingGuardSwitch = AddSwitchRow(lgsrDetailsSection, S["LgsrClippingGuardTitle"], store.LgsrClippingGuard, v => {
             store.LgsrClippingGuard = v;
             ApplyAndRefreshLgsr(rescanTwin: false);
         }, helpBody: S["TipLgsrClippingGuard"]);
-        AddDivider(slot2cCard);
+        AddDivider(lgsrDetailsSection);
 
-        lgsrBitstreamGuideSwitch = AddSwitchRow(slot2cCard, S["LgsrBitstreamGuideTitle"], store.LgsrBitstreamGuide, v => {
+        lgsrBitstreamGuideSwitch = AddSwitchRow(lgsrDetailsSection, S["LgsrBitstreamGuideTitle"], store.LgsrBitstreamGuide, v => {
             store.LgsrBitstreamGuide = v;
             ApplyAndRefreshLgsr(rescanTwin: false);
         }, helpBody: S["TipLgsrBitstreamGuide"]);
-        AddDivider(slot2cCard);
+        AddDivider(lgsrDetailsSection);
 
-        lgsrRejectFakeSwitch = AddSwitchRow(slot2cCard, S["LgsrRejectFakeTitle"], store.LgsrRejectFakeLossless, v => {
+        lgsrRejectFakeSwitch = AddSwitchRow(lgsrDetailsSection, S["LgsrRejectFakeTitle"], store.LgsrRejectFakeLossless, v => {
             store.LgsrRejectFakeLossless = v;
             ApplyAndRefreshLgsr(rescanTwin: true);
         }, helpBody: S["TipLgsrRejectFake"]);
-        AddDivider(slot2cCard);
+        AddDivider(lgsrDetailsSection);
 
-        lgsrTier3CleanupSwitch = AddSwitchRow(slot2cCard, S["LgsrTier3CleanupTitle"], store.LgsrTier3ResidualCleanup, v => {
+        lgsrTier3CleanupSwitch = AddSwitchRow(lgsrDetailsSection, S["LgsrTier3CleanupTitle"], store.LgsrTier3ResidualCleanup, v => {
             store.LgsrTier3ResidualCleanup = v;
             ApplyAndRefreshLgsr(rescanTwin: false);
         }, helpBody: S["TipLgsrTier3Cleanup"]);
@@ -473,10 +514,11 @@ public partial class MainActivity {
         lgsrBtns.AddView(lgsrAbBypassBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(6) });
         lgsrBtns.AddView(lgsrRescanBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(6) });
         lgsrBtns.AddView(lgsrLicBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.90f));
-        slot2cCard.AddView(lgsrBtns, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        lgsrDetailsSection.AddView(lgsrBtns, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(10)
         });
 
+        slot2cCard.AddView(lgsrDetailsSection);
         RegisterSettingsCard(slot2cCard, categoryIndex: 2, isProOnly: true, "lgsr lossless twin restoration atmos eac3 flac fusion envelope lock tier3");
 
     }
@@ -543,6 +585,17 @@ public partial class MainActivity {
     }
 
     void RefreshNeuralAudioUi() {
+        if (neuralCacheDetailsSection != null && store != null) {
+            neuralCacheDetailsSection.Visibility = store.NeuralTrackCacheEnabled ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (karaokeDetailsSection != null && store != null) {
+            karaokeDetailsSection.Visibility = store.SpatialKaraokeEnabled ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (mvsepConfigBtn != null && store != null) {
+            bool showMvsep = store.NeuralExecutionBackendIndex != 1;
+            mvsepConfigBtn.Visibility = showMvsep ? ViewStates.Visible : ViewStates.Gone;
+            if (mvsepStatusText != null) mvsepStatusText.Visibility = showMvsep ? ViewStates.Visible : ViewStates.Gone;
+        }
         if (uiDestroyed) {
             return;
         }
@@ -1351,6 +1404,9 @@ public partial class MainActivity {
     }
 
     void RefreshLgsrUi() {
+        if (lgsrDetailsSection != null && store != null) {
+            lgsrDetailsSection.Visibility = store.LgsrEnabled ? ViewStates.Visible : ViewStates.Gone;
+        }
         if (uiDestroyed || lgsrStatusText == null) {
             return;
         }

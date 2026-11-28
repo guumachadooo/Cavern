@@ -34,6 +34,8 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    LinearLayout autoEqDetailsSection;
+    LinearLayout headTrackingDetailsSection;
     static readonly AutoEqNeutralTarget[] AutoEqTargetUiOrder = [
         AutoEqNeutralTarget.NativeAutoEqProfile,
         AutoEqNeutralTarget.Bk5128Jm1Neutral,
@@ -126,6 +128,7 @@ public partial class MainActivity {
             if (IsCoordinatorUpdating) return;
             store.AutoEqEnabled = v;
             ApplyAutoEqRespectingRoute();
+        autoEqDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
             audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
             RefreshAutoEqUi();
         }, helpBody: S["TipAutoEq"]);
@@ -151,7 +154,7 @@ public partial class MainActivity {
         autoEqRow.AddView(autoEqCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         autoEqRow.AddView(new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.TextSub), new LinearLayout.LayoutParams(Dp(16), Dp(16)));
         autoEqRow.Click += (_, _) => ShowAutoEqProfileSelectorDialog();
-        headphoneOnlyCalibGroup.AddView(autoEqRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        autoEqDetailsSection.AddView(autoEqRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(4),
             BottomMargin = Dp(8)
         });
@@ -172,26 +175,26 @@ public partial class MainActivity {
             audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
             RefreshAutoEqUi();
         };
-        headphoneOnlyCalibGroup.AddView(WrapControlWithHelp(autoEqTargetSelector, S["AutoEqTargetTitle"], S["TipAutoEqTarget"], bottomMarginDp: 2));
+        autoEqDetailsSection.AddView(WrapControlWithHelp(autoEqTargetSelector, S["AutoEqTargetTitle"], S["TipAutoEqTarget"], bottomMarginDp: 2));
 
         autoEqTargetDescText = Label("", 11.2f, OneUiTheme.TextMuted);
         autoEqTargetDescText.SetMaxLines(2);
         autoEqTargetDescText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        headphoneOnlyCalibGroup.AddView(autoEqTargetDescText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        autoEqDetailsSection.AddView(autoEqTargetDescText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(1),
             BottomMargin = Dp(8)
         });
         UpdateAutoEqTargetDescriptionText();
 
-        autoEqDoubleEqGuardSwitch = AddSwitchRow(headphoneOnlyCalibGroup, S["AutoEqDoubleEqGuardTitle"], store.AutoEqDoubleEqGuard, v => {
+        autoEqDoubleEqGuardSwitch = AddSwitchRow(autoEqDetailsSection, S["AutoEqDoubleEqGuardTitle"], store.AutoEqDoubleEqGuard, v => {
             if (IsCoordinatorUpdating) return;
             store.AutoEqDoubleEqGuard = v;
             ApplyAutoEqRespectingRoute();
             RefreshAutoEqUi();
         }, helpBody: S["TipAutoEqDoubleEqGuard"]);
-        AddDivider(headphoneOnlyCalibGroup);
+        AddDivider(autoEqDetailsSection);
 
-        autoEqAutoSwitchDeviceSwitch = AddSwitchRow(headphoneOnlyCalibGroup, S["AutoEqAutoDeviceTitle"], store.AutoEqAutoSwitchByDevice, v => {
+        autoEqAutoSwitchDeviceSwitch = AddSwitchRow(autoEqDetailsSection, S["AutoEqAutoDeviceTitle"], store.AutoEqAutoSwitchByDevice, v => {
             if (IsCoordinatorUpdating) return;
             store.AutoEqAutoSwitchByDevice = v;
             if (v) {
@@ -205,7 +208,8 @@ public partial class MainActivity {
         Button creditsAutoEqBtn = PillButton(S["AutoEqCreditsBtn"], ShowAutoEqLicenseCreditsDialog);
         autoEqActionsRow.AddView(importAutoEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
         autoEqActionsRow.AddView(creditsAutoEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        headphoneOnlyCalibGroup.AddView(autoEqActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
+        autoEqDetailsSection.AddView(autoEqActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
+        headphoneOnlyCalibGroup.AddView(autoEqDetailsSection);
 
         AddDivider(headphoneOnlyCalibGroup);
         rendCard.AddView(headphoneOnlyCalibGroup);
@@ -234,7 +238,7 @@ public partial class MainActivity {
         rendCard.AddView(WrapControlWithHelp(filtersBtn, S["LoadFilters"], S["TipQuickEQ"], bottomMarginDp: 8));
 
         speakerVirtSwitch = AddSwitchRow(rendCard, S["SpeakerVirt"], store.SpeakerVirtualizer, v => store.SpeakerVirtualizer = v, helpBody: S["TipSpeakerVirt"]);
-        RegisterSettingsCard(rendCard, categoryIndex: 1, isProOnly: false, "headphones binaural hrir brir sofa autoeq quickeq speaker virtualizer calibration");
+        RegisterSettingsCard(rendCard, categoryIndex: 3, isProOnly: false, "headphones binaural hrir brir sofa autoeq quickeq speaker virtualizer calibration");
 
         // Low-Latency Audio, USB DAC & 3DoF/6DoF Head Tracking
         LinearLayout slot4Card = Card(S["Slot4CardTitle"], OneUiIconType.Bolt, OneUiTheme.IconSpatial);
@@ -270,6 +274,7 @@ public partial class MainActivity {
         headTrackingEnabledSwitch = AddSwitchRow(slot4Card, S["HeadTrackingEnableTitle"], store.HeadTrackingEnabled, v => {
             store.HeadTrackingEnabled = v;
             var src = (Cavernize.Logic.Spatial.HeadTrackerSourceKind)Math.Clamp(store.HeadTrackerSourceIndex, 0, 3);
+        headTrackingDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
             if (v) {
                 RequestBluetoothPermissionsIfNeeded(src);
             }
@@ -297,20 +302,20 @@ public partial class MainActivity {
         };
         LinearLayout htSrcWrap = WrapControlWithHelp(headTrackerSourceSelector, S["HeadTrackerSourceTitle"].TrimEnd(':'), S["TipHeadTrackerSource"], bottomMarginDp: 8);
         htSrcWrap.SetPadding(0, Dp(4), 0, 0);
-        slot4Card.AddView(htSrcWrap);
+        headTrackingDetailsSection.AddView(htSrcWrap);
 
-        headTrackingAutoRecenterSwitch = AddSwitchRow(slot4Card, S["HeadTrackingAutoRecenterTitle"], store.HeadTrackingAutoRecenter, v => {
+        headTrackingAutoRecenterSwitch = AddSwitchRow(headTrackingDetailsSection, S["HeadTrackingAutoRecenterTitle"], store.HeadTrackingAutoRecenter, v => {
             store.HeadTrackingAutoRecenter = v;
             headTrackingManager?.ApplySettings();
         });
-        AddDivider(slot4Card);
-        headTrackingLockRollSwitch = AddSwitchRow(slot4Card, S["HeadTrackingLockRollTitle"], store.HeadTrackingLockRoll, v => {
+        AddDivider(headTrackingDetailsSection);
+        headTrackingLockRollSwitch = AddSwitchRow(headTrackingDetailsSection, S["HeadTrackingLockRollTitle"], store.HeadTrackingLockRoll, v => {
             store.HeadTrackingLockRoll = v;
             headTrackingManager?.ApplySettings();
         });
-        AddDivider(slot4Card);
+        AddDivider(headTrackingDetailsSection);
         (headTrackingPredictBar, _) = AddSliderRow(
-            slot4Card,
+            headTrackingDetailsSection,
             S["HeadTrackingPredictMs"],
             0,
             100,
@@ -326,7 +331,7 @@ public partial class MainActivity {
         headTrackingStatusText = Label("", 11.2f, OneUiTheme.TextSub);
         headTrackingStatusText.SetSingleLine(true);
         headTrackingStatusText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        slot4Card.AddView(headTrackingStatusText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        headTrackingDetailsSection.AddView(headTrackingStatusText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(2),
             BottomMargin = Dp(8)
         });
@@ -339,7 +344,8 @@ public partial class MainActivity {
         headTrackingOscPortBtn = PillButton(string.Format(S["HeadTrackingOscPortBtn"], store.HeadTrackingOscPort), ShowOscPortModal);
         htActionsRow.AddView(recenterNowBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
         htActionsRow.AddView(headTrackingOscPortBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        slot4Card.AddView(htActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        headTrackingDetailsSection.AddView(htActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        slot4Card.AddView(headTrackingDetailsSection);
         RegisterSettingsCard(slot4Card, categoryIndex: 3, isProOnly: false, "low latency usb dac head tracking imu galaxy buds ble osc gyro");
 
     }
@@ -673,6 +679,9 @@ public partial class MainActivity {
     }
 
     void RefreshHeadTrackingUi() {
+        if (headTrackingDetailsSection != null && store != null) {
+            headTrackingDetailsSection.Visibility = store.HeadTrackingEnabled ? ViewStates.Visible : ViewStates.Gone;
+        }
         if (uiDestroyed || store == null) {
             return;
         }
@@ -758,6 +767,9 @@ public partial class MainActivity {
     }
 
     void RefreshAutoEqUi() {
+        if (autoEqDetailsSection != null && store != null) {
+            autoEqDetailsSection.Visibility = store.AutoEqEnabled ? ViewStates.Visible : ViewStates.Gone;
+        }
         bool isSpeakerRoute = IsActiveOutputSpeakerRoute();
         if (headphoneCalibBypassHintText != null) {
             headphoneCalibBypassHintText.Visibility = isSpeakerRoute ? ViewStates.Visible : ViewStates.Gone;

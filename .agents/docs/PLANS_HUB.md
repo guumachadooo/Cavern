@@ -58,7 +58,7 @@
 
 ## 4. Live Machine-Synced Inventory
 <!-- HUB:AUTO_START -->
-HUB_STATS|blueprints=8 (done=0, partial=7, active=0, deferred=1, superseded=0)|archived_done=12|min_score=100/100|open_conflicts=0|monoliths_gt2000=5
+HUB_STATS|blueprints=8 (done=0, partial=7, active=0, deferred=1, superseded=0)|archived_done=12|min_score=100/100|open_conflicts=0|monoliths_gt2000=0
 
 | Blueprint ID | Status | Score | Tier | H2+ Stubs | Hygiene / Lineage Note |
 | :--- | :---: | :---: | :---: | :---: | :--- |
@@ -72,15 +72,6 @@ HUB_STATS|blueprints=8 (done=0, partial=7, active=0, deferred=1, superseded=0)|a
 | `BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS` | `PARTIAL` | `100/100` | `T3` | `1` | W51.1-W51.7 code DONE (v2.9.81) + ONNX low-RAM fixes (v2.9.82); W52 live S25U verification pending. |
 
 ARCHIVED_DONE|count=12|ledger=`.agents/docs/archive/BLUEPRINTS_DONE_LEDGER.md`|tarball=`.agents/docs/archive/blueprints_done.tar.gz`|ids=`BP_AUDIO_AI_SEPARATION_ENSEMBLE_AND_MVSEP`, `BP_BLUEPRINT_ARCHITECTURE_V2`, `BP_CORE_RUNTIME_STABILITY_AND_SCHEDULING`, `BP_DEVICE_LOG_REMEDIATION`, `BP_FRACTAL_PARALLEL_WAVE_ORCHESTRATION`, `BP_INSTANT_ZERO_WASTE_RESUME`, `BP_LIVE_QA_BUG_HUNTER_SOTA`, `BP_ONEUI9_UX_MOTION_DISCOVERY_AND_LYRICS`, `BP_PLAN_GOVERNANCE_AND_CENTRAL_HUB`, `BP_STUDIO_EXPORT_METADATA_AND_DYNAMIC_ATMOS`, `BP_STUDIO_SPATIAL_EXPORT_COMPRESSION`, `BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY`
-
-### Oversized Code Files (`>2,000L` Live Scan)
-| File | Lines | Cap |
-| :--- | ---: | ---: |
-| `CavernSamples/Reusable/Cavernize.Logic/Rendering/StudioBatchExporter.cs` | `3572` | `2000` |
-| `CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs` | `2182` | `2000` |
-| `CavernSamples/CavernizeAndroid/Audio/AndroidAudioOutput.cs` | `2161` | `2000` |
-| `CavernSamples/CavernizeAndroid/Services/MediaLibraryService.cs` | `2046` | `2000` |
-| `CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs` | `2013` | `2000` |
 COHERENCE_HUB|.agents/docs/COHERENCE_HUB.md
 <!-- HUB:AUTO_END -->
 

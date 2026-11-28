@@ -41,7 +41,9 @@ public partial class MainActivity {
     }
 
     void RefreshSettingsDot() {
-        ViewStates vis = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone;
+        bool show = ShouldShowSettingsDot();
+        ViewStates vis = show ? ViewStates.Visible : ViewStates.Gone;
+        UpdateSettingsGearOtaBadge(show);
         if (settingsUpdateDot != null) {
             settingsUpdateDot.Visibility = vis;
         }

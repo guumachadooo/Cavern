@@ -3748,7 +3748,7 @@ class LiveBugHunter:
         # 6b. Rapid Tab Thrash + Full Q1 Geometric/Visual ui_tree Inspection + optional Golden SSIM
         geom_tabs_scanned = 0
         ssim_tabs_checked = 0
-        for tab_idx in (0, 4, 1, 3, 2):
+        for tab_idx in (0, 1, 2):
             self.bridge.cmd("tab_switch", {"index": tab_idx}, tier=1, timeout_sec=15)
             ut = self.bridge.cmd("ui_tree", {"maxDepth": 12, "geometry": True}, tier=0, timeout_sec=20)
             if ut["ok"] and isinstance(ut["json"], dict):
@@ -4068,7 +4068,7 @@ class LiveBugHunter:
         if self.meta.get("uiHostAttached") and self.allow_mutate:
             if has_rt:
                 self.bridge.cmd("runtime_telemetry", {"resetFrameMetrics": True}, tier=0, timeout_sec=15)
-            for tab_idx, tab_name in ((2, "Play"), (4, "Settings"), (0, "Converter"), (2, "Play")):
+            for tab_idx, tab_name in ((0, "Library"), (1, "Sound"), (2, "Export"), (0, "Library")):
                 t0 = time.monotonic()
                 r = self.bridge.cmd("tab_switch", {"index": tab_idx}, tier=1, timeout_sec=20)
                 dt_ms = (time.monotonic() - t0) * 1000.0

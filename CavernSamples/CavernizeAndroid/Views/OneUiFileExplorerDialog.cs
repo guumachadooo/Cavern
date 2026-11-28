@@ -370,9 +370,8 @@ public static class OneUiFileExplorerDialog {
                 OneUiTheme.AttachRecoil(row, 0.98f);
 
                 if (opts.Mode == ExplorerPickMode.MultiFolder) {
-                    CheckBox cb = new(ctx) { Checked = isChecked };
-                    cb.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(OneUiTheme.Primary);
-                    cb.CheckedChange += (_, e) => {
+                    OneUiSwitch cb = new(ctx) { Checked = isChecked };
+                                        cb.CheckedChange += (_, e) => {
                         if (e.IsChecked) selectedPaths.Add(d.Path);
                         else selectedPaths.Remove(d.Path);
                         row.Background = OneUiTheme.CreateRoundedDrawable(
@@ -444,11 +443,10 @@ public static class OneUiFileExplorerDialog {
                     OneUiTheme.AttachRecoil(row, 0.98f);
                 }
 
-                CheckBox fileCb = null;
+                OneUiSwitch fileCb = null;
                 if (opts.Mode == ExplorerPickMode.MultiFile) {
-                    fileCb = new CheckBox(ctx) { Checked = isSel };
-                    fileCb.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(OneUiTheme.Primary);
-                    row.AddView(fileCb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = dp(4) });
+                    fileCb = new OneUiSwitch(ctx) { Checked = isSel };
+                                        row.AddView(fileCb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = dp(4) });
                 } else {
                     OneUiIconView noteIco = new(ctx, OneUiIconType.MusicFile,
                         f.IsSpatial ? OneUiTheme.PrimaryHigh : OneUiTheme.TextSub);

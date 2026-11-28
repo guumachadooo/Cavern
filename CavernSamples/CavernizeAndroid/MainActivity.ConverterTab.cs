@@ -50,7 +50,7 @@ public partial class MainActivity {
     int selectedStudioWorkflow; // 0 = Master, 1 = Classic, 2 = Queue
     LinearLayout studioW12KaraokeContainer;
     OneUiSeekBar studioW12KaraokeBar;
-    CheckBox applyRoomToExportCheck;
+    OneUiSwitch applyRoomToExportCheck;
     ProgressBar convertProgressBar;
     LinearLayout pipelineStageContainer;
     TextView pipelineStageTitleTv;
@@ -96,74 +96,9 @@ public partial class MainActivity {
         page.LayoutChange += (_, _) => UpdatePad();
     }
 
-    LinearLayout BuildConverterTab() {
-        LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        ApplyTabPageCutoutPadding(page);
+    LinearLayout BuildConverterTab() => BuildUnifiedExportTab();
 
-        // 1. Segmented Workflow Selector (Master | Classic | Queue) + Readiness Pills Card (WorkspaceSourceBar hoisted above contentFrame)
-        LinearLayout modeCard = Card();
-        string[] workflowNames = [
-            S["StudioModeMaster"],
-            S["StudioModeClassic"],
-            S["StudioModeQueue"]
-        ];
-
-        LinearLayout segRow = HRow();
-        segRow.SetPadding(0, Dp(2), 0, Dp(6));
-        studioWorkflowPillBtns.Clear();
-        for (int i = 0; i < workflowNames.Length; i++) {
-            int modeIdx = i;
-            Button pill = PillButton(workflowNames[i], () => SetStudioWorkflowMode(modeIdx), active: i == selectedStudioWorkflow);
-            pill.TextSize = 11.5f;
-            pill.SetPadding(Dp(8), Dp(7), Dp(8), Dp(7));
-            studioWorkflowPillBtns.Add(pill);
-            segRow.AddView(pill, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
-                RightMargin = i < workflowNames.Length - 1 ? Dp(6) : 0
-            });
-        }
-        modeCard.AddView(segRow);
-
-        studioReadinessContainer = new LinearLayout(this) {
-            Orientation = Orientation.Vertical,
-            Visibility = ViewStates.Gone
-        };
-        AddDivider(studioReadinessContainer);
-        TextView readyHdr = Label(S["StudioReadinessHeader"], 11.5f, ColMuted);
-        readyHdr.SetPadding(0, Dp(2), 0, Dp(6));
-        studioReadinessContainer.AddView(readyHdr);
-
-        studioReadinessBadgeRow1 = HRow();
-        studioBadgeTruehdBtn = PillButton(S["StudioBadgeTrueHdReady"], OnTrueHdReadinessBadgeClicked);
-        studioBadgeFfmpegBtn = PillButton(S["StudioBadgeFFmpegReady"], () => SwitchTab(4));
-        studioBadgeTruehdBtn.TextSize = 11f;
-        studioBadgeFfmpegBtn.TextSize = 11f;
-        studioReadinessBadgeRow1.AddView(studioBadgeTruehdBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        studioReadinessBadgeRow1.AddView(studioBadgeFfmpegBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        studioReadinessContainer.AddView(studioReadinessBadgeRow1, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
-
-        studioReadinessBadgeRow2 = HRow();
-        studioBadgeOnnxBtn = PillButton(S["StudioBadgeOnnxReady"], OnOnnxReadinessBadgeClicked);
-        studioBadgeTwinBtn = PillButton(S["StudioBadgeTwinNone"], OnTwinReadinessBadgeClicked);
-        studioBadgeOnnxBtn.TextSize = 11f;
-        studioBadgeTwinBtn.TextSize = 11f;
-        studioReadinessBadgeRow2.AddView(studioBadgeOnnxBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        studioReadinessBadgeRow2.AddView(studioBadgeTwinBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        studioReadinessContainer.AddView(studioReadinessBadgeRow2);
-        modeCard.AddView(studioReadinessContainer);
-
-        studioPrereqJumpBtn = SecondaryButton(S["OpenSettingsBtn"], OnStudioPrerequisiteJumpClicked);
-        studioPrereqJumpBtn.Visibility = ViewStates.Gone;
-        modeCard.AddView(studioPrereqJumpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(8)
-        });
-        page.AddView(modeCard);
-
-        // 2A. Master Workflow Section (W48 Vocal Performance Recorder + Composable Spatial Export Builder)
-        studioMasterSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        studioMasterSection.AddView(BuildStudioPerformanceRecorderCard());
-        studioMasterSection.AddView(BuildStudioComposableExportCard());
-        page.AddView(studioMasterSection);
-
+    LinearLayout BuildClassicConvertSection() {
         // 2B. Classic Workflow Section (System Target + Codec/Container + Collapsible Pro Options)
         studioClassicSection = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
@@ -239,14 +174,13 @@ public partial class MainActivity {
             studioProChevron.IconType = isStudioProExpanded ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
         };
 
-        applyRoomToExportCheck = new CheckBox(this) {
+        applyRoomToExportCheck = new OneUiSwitch(this) {
             Text = S["ApplyRoomToExport"],
             Checked = false,
             TextSize = 12.5f
         };
         applyRoomToExportCheck.SetTextColor(ColText);
-        applyRoomToExportCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
-        studioProContentContainer.AddView(WrapControlWithHelp(applyRoomToExportCheck, S["ApplyRoomToExport"], S["TipApplyRoomExport"], bottomMarginDp: 6));
+                studioProContentContainer.AddView(WrapControlWithHelp(applyRoomToExportCheck, S["ApplyRoomToExport"], S["TipApplyRoomExport"], bottomMarginDp: 6));
 
         wiringBtn = PillButton(S["DisplayWiring"], DisplayWiringDialog);
         studioProContentContainer.AddView(wiringBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -262,30 +196,11 @@ public partial class MainActivity {
 
         expCard.AddView(studioProContentContainer);
         studioClassicSection.AddView(expCard);
-        page.AddView(studioClassicSection);
 
-        // 2C. Queue Workflow Section (Batch Render Queue — 2-row non-clipping secondary buttons)
-        studioQueueSection = new LinearLayout(this) {
-            Orientation = Orientation.Vertical,
-            Visibility = ViewStates.Gone
-        };
-        LinearLayout queueCard = Card(S["QueueTitle"], OneUiIconType.Queue, OneUiTheme.IconAtmosUpmix);
-        queueListContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        queueCard.AddView(queueListContainer);
+        return studioClassicSection;
+    }
 
-        LinearLayout qRow1 = HRow();
-        qRow1.SetPadding(0, Dp(10), 0, Dp(6));
-        studioQueueAddInQueueTabBtn = PillButton(S["AddQueueBtn"], AddCurrentToQueue);
-        studioBatchAddBtn = PillButton(S["BatchAddBtn"], () => OpenMultiFilesWithExplorer(AddLocalPathsToQueue));
-        qRow1.AddView(studioQueueAddInQueueTabBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        qRow1.AddView(studioBatchAddBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        queueCard.AddView(qRow1);
-
-        studioQueueRemoveBtn = PillButton(S["RemoveQueueBtn"], RemoveLastFromQueue);
-        queueCard.AddView(studioQueueRemoveBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        studioQueueSection.AddView(queueCard);
-        page.AddView(studioQueueSection);
-
+    LinearLayout BuildStudioFooterCard() {
         // 3. Shared Unified Primary Action, Progress, Status, Cancel, Share & Play Footer Card
         LinearLayout footerCard = Card();
         LinearLayout actRow = HRow();
@@ -386,40 +301,11 @@ public partial class MainActivity {
         postBtns.AddView(shareExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
         postBtns.AddView(playExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         footerCard.AddView(postBtns);
-        page.AddView(footerCard);
 
-        RefreshQueueList();
-        RefreshConverterTabState();
-        SetStudioWorkflowMode(selectedStudioWorkflow);
-        return page;
+        return footerCard;
     }
 
-    void SetStudioWorkflowMode(int modeIdx) {
-        selectedStudioWorkflow = Math.Clamp(modeIdx, 0, 2);
-        for (int i = 0; i < studioWorkflowPillBtns.Count; i++) {
-            bool sel = i == selectedStudioWorkflow;
-            Button b = studioWorkflowPillBtns[i];
-            b.Background = sel
-                ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
-                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
-            b.SetTextColor(sel ? OneUiTheme.OnPrimary : ColText);
-            b.SetTypeface(null, sel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
-        }
-        if (studioMasterSection != null) {
-            studioMasterSection.Visibility = selectedStudioWorkflow == 0 ? ViewStates.Visible : ViewStates.Gone;
-        }
-        if (studioClassicSection != null) {
-            studioClassicSection.Visibility = selectedStudioWorkflow == 1 ? ViewStates.Visible : ViewStates.Gone;
-        }
-        if (studioQueueSection != null) {
-            studioQueueSection.Visibility = selectedStudioWorkflow == 2 ? ViewStates.Visible : ViewStates.Gone;
-        }
-        if (selectedStudioWorkflow == 2) {
-            RefreshQueueList();
-        }
-        RefreshStudioPrimaryCtaUi();
-        RefreshStudioReadinessUi();
-    }
+    void SetStudioWorkflowMode(int modeIdx) => SelectExportSubMode(modeIdx);
 
     void ExecuteActiveStudioPrimaryAction() {
         switch (selectedStudioWorkflow) {
@@ -572,7 +458,7 @@ public partial class MainActivity {
         if (selectedTrack != null && selectedTrack.Codec == Codec.TrueHD && decodedTrueHDTrack == null) {
             PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
         } else {
-            SwitchTab(4);
+            ShowAppSettingsSheet();
         }
     }
 
@@ -580,7 +466,7 @@ public partial class MainActivity {
         if (OnnxRuntimeInstallerService.IsRuntimeInstalled(this)) {
             ShowNeuralModelsModal();
         } else {
-            SwitchTab(4);
+            ShowAppSettingsSheet();
         }
     }
 
@@ -589,7 +475,7 @@ public partial class MainActivity {
         if (active != null && !IsLosslessTwinSynced(out _)) {
             StartLosslessTwinDiscoveryAsync(active);
         } else {
-            SwitchTab(4);
+            SwitchToSettingsCategory(2);
         }
     }
 
@@ -603,7 +489,7 @@ public partial class MainActivity {
             ShowNeuralModelsModal();
             return;
         }
-        SwitchTab(4);
+        ShowAppSettingsSheet();
     }
 
     void RefreshConverterTabState() {
@@ -934,18 +820,17 @@ public partial class MainActivity {
         ];
 
         LinearLayout content = new(this) { Orientation = Orientation.Vertical };
-        CheckBox[] boxes = new CheckBox[allFormats.Length];
+        OneUiSwitch[] boxes = new OneUiSwitch[allFormats.Length];
         int currentSelected = Math.Clamp(store?.StudioBaseFormatIndex ?? 0, 0, allFormats.Length - 1);
         for (int i = 0; i < allFormats.Length; i++) {
             StudioBaseOutputFormat fmt = allFormats[i];
-            CheckBox cb = new(this) {
+            OneUiSwitch cb = new(this) {
                 Text = GetStudioBaseFormatLabel(fmt),
                 Checked = i == currentSelected || fmt == StudioBaseOutputFormat.Headphone3D || fmt == StudioBaseOutputFormat.EclipsaIamf,
                 TextSize = 13f
             };
             cb.SetTextColor(ColText);
-            cb.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
-            cb.SetPadding(Dp(6), Dp(6), Dp(4), Dp(6));
+                        cb.SetPadding(Dp(6), Dp(6), Dp(4), Dp(6));
             content.AddView(cb);
             boxes[i] = cb;
         }
@@ -1469,342 +1354,5 @@ public partial class MainActivity {
         writer.FinalFeedbackStart = progressSplit;
         writer.Dispose();
         return stats;
-    }
-
-    void RunBackgroundOperation(Action<CancellationToken> work, string singleOutputPath) {
-        activeCts?.Dispose();
-        activeCts = new CancellationTokenSource();
-        CancellationToken token = activeCts.Token;
-        lastExportSourcePath = "";
-
-        isOperationRunning = true;
-        RunOnUiThread(() => {
-            HideLastExportActionBar();
-            SetRunningUiState(true);
-        });
-        Task.Run(() => {
-            AndroidRuntimeTelemetry.ApplyBackgroundThreadQoS();
-            try {
-                work(token);
-                if (!string.IsNullOrEmpty(singleOutputPath) &&
-                    !string.Equals(lastExportSourcePath, singleOutputPath, StringComparison.Ordinal) &&
-                    File.Exists(singleOutputPath)) {
-                    try {
-                        ExportMetadataPackage classicMeta = BuildExportMetadataPackageForActiveTrack(GetActiveTrack());
-                        ExportMetadataEmbedder.EmbedInPlace(singleOutputPath, classicMeta);
-                    } catch (Exception metaEx) {
-                        AppLogger.Warn($"Background export metadata embed skipped: {metaEx.Message}");
-                    }
-                    ExportPublishResult pub = AndroidFileHelper.PublishExportedAudio(this, singleOutputPath, GetSelectedExportDestination());
-                    string displayPath = !string.IsNullOrEmpty(pub?.LocalPath) ? pub.LocalPath : singleOutputPath;
-                    lastExportSourcePath = singleOutputPath;
-                    RunOnUiThread(() => ShowPublishedExportActions(pub, displayPath));
-                }
-            } catch (System.OperationCanceledException) {
-                AppLogger.Info("Background render operation cancelled by user.");
-                RunOnUiThread(() => SetConvertStatus(S["CancelledStatus"], 0));
-            } catch (Exception ex) {
-                AppLogger.Error("RunBackgroundOperation", ex);
-                RunOnUiThread(() => {
-                    SetConvertStatus(ex.Message, 0);
-                    ShowError(ex.Message);
-                });
-            } finally {
-                isOperationRunning = false;
-                RunOnUiThread(() => SetRunningUiState(false));
-            }
-        });
-    }
-
-    void SetRunningUiState(bool running) {
-        if (renderBtn != null) renderBtn.Enabled = !running;
-        if (studioW12ExportBtn != null) studioW12ExportBtn.Enabled = !running;
-        if (studioW12BatchBtn != null) studioW12BatchBtn.Enabled = !running;
-        if (selectTargetBtn != null) selectTargetBtn.Enabled = !running;
-        if (applyRoomToExportCheck != null) applyRoomToExportCheck.Enabled = !running;
-        if (studioQueueAddBtn != null) studioQueueAddBtn.Enabled = !running;
-        if (studioQueueAddInQueueTabBtn != null) studioQueueAddInQueueTabBtn.Enabled = !running;
-        if (studioBatchAddBtn != null) studioBatchAddBtn.Enabled = !running;
-        if (studioQueueRemoveBtn != null) studioQueueRemoveBtn.Enabled = !running;
-        if (studioMetaBtn != null) studioMetaBtn.Enabled = !running;
-        if (studioReportBtn != null) studioReportBtn.Enabled = !running;
-        if (wiringBtn != null) {
-            wiringBtn.Enabled = !running && RenderTarget is not DriverRenderTarget && RenderTarget is not VirtualizerRenderTarget;
-        }
-        for (int i = 0; i < studioWorkflowPillBtns.Count; i++) {
-            studioWorkflowPillBtns[i].Enabled = !running;
-        }
-        SetStudioExportControlsBusy(running);
-        if (exportFormatSelector != null) {
-            exportFormatSelector.Enabled = !running;
-            exportFormatSelector.Alpha = running ? 0.55f : 1f;
-        }
-        if (containerSelector != null) {
-            containerSelector.Enabled = !running;
-            containerSelector.Alpha = running ? 0.55f : 1f;
-        }
-        if (cancelRenderBtn != null) cancelRenderBtn.Enabled = running || ExportMediaProcessingService.IsExportActive;
-        if (extractBtn != null) extractBtn.Enabled = !running;
-        if (cancelExtractBtn != null) cancelExtractBtn.Enabled = running;
-        if (extractJsonCheck != null) extractJsonCheck.Enabled = !running;
-        if (extractResidualCheck != null) extractResidualCheck.Enabled = !running;
-        for (int i = 0; i < extractBitButtons.Count; i++) {
-            extractBitButtons[i].Enabled = !running && selectedExtractMode != 3;
-        }
-        if (running) {
-            pipelineStartedUtc = DateTime.UtcNow;
-            lastPipelineStageIndex = 0;
-            UpdatePipelineStageVisuals(0, 0.0, isCompleted: false, visible: true);
-        } else if (pipelineStageContainer != null && lastPipelineStageIndex < 0) {
-            pipelineStageContainer.Visibility = ViewStates.Gone;
-        }
-        RefreshStudioPrimaryCtaUi();
-    }
-
-    void SetConvertStatus(string text, double progress) {
-        if (convertStatusText != null) {
-            convertStatusText.Text = text ?? "";
-        }
-        if (convertProgressBar != null) {
-            if (progress < 0) {
-                convertProgressBar.Indeterminate = true;
-            } else {
-                convertProgressBar.Indeterminate = false;
-                convertProgressBar.Progress = Math.Clamp((int)Math.Round(progress * 1000.0), 0, 1000);
-            }
-        }
-        bool isDone = !isOperationRunning && progress >= 0.999;
-        bool shouldShow = isOperationRunning || isDone;
-        if (shouldShow) {
-            int stage = ResolvePipelineStageIndex(text ?? "", progress, isDone);
-            lastPipelineStageIndex = stage;
-            UpdatePipelineStageVisuals(stage, progress, isDone, visible: true);
-        } else if (pipelineStageContainer != null) {
-            lastPipelineStageIndex = -1;
-            pipelineStageContainer.Visibility = ViewStates.Gone;
-        }
-    }
-
-    static int ResolvePipelineStageIndex(string statusText, double progress, bool isDone) {
-        if (isDone) {
-            return 4;
-        }
-        string t = (statusText ?? "").ToLowerInvariant();
-        if (t.Contains("encod") || t.Contains("mux") || t.Contains("flac") || t.Contains("export") ||
-            t.Contains("saving") || t.Contains("salvando") || t.Contains("finaliz") || t.Contains("merging") ||
-            t.Contains("gravando") || t.Contains("packing")) {
-            return 3;
-        }
-        if (t.Contains("render") || t.Contains("spatial") || t.Contains("espacial") || t.Contains("upmix") ||
-            t.Contains("binaural") || t.Contains("atmos") || t.Contains("master") || t.Contains("convolv") ||
-            t.Contains("loudness") || t.Contains("iamf")) {
-            return 2;
-        }
-        if (t.Contains("neural") || t.Contains("onnx") || t.Contains("scnet") || t.Contains("vocal") ||
-            t.Contains("stem") || t.Contains("separat") || t.Contains("isolat") || t.Contains("isoland") ||
-            t.Contains("karaoke") || t.Contains("demux") || t.Contains("dna")) {
-            return 1;
-        }
-        if (t.Contains("analy") || t.Contains("analis") || t.Contains("decod") || t.Contains("probe") ||
-            t.Contains("truehd") || t.Contains("prepar") || t.Contains("load") || t.Contains("carreg")) {
-            return 0;
-        }
-        if (progress < 0) {
-            return 0;
-        }
-        if (progress >= 0.85) return 3;
-        if (progress >= 0.45) return 2;
-        if (progress >= 0.15) return 1;
-        return 0;
-    }
-
-    void UpdatePipelineStageVisuals(int activeStage, double progress, bool isCompleted, bool visible) {
-        if (pipelineStageContainer == null) {
-            return;
-        }
-        pipelineStageContainer.Visibility = visible ? ViewStates.Visible : ViewStates.Gone;
-        if (!visible) {
-            return;
-        }
-        string[] stageTitles = [
-            S["PipelineStageAnalyzing"],
-            S["PipelineStageIsolating"],
-            S["PipelineStageRendering"],
-            S["PipelineStageExporting"],
-            S["PipelineStageDone"]
-        ];
-        int titleIdx = Math.Clamp(isCompleted ? 4 : activeStage, 0, 4);
-        if (pipelineStageTitleTv != null) {
-            pipelineStageTitleTv.Text = stageTitles[titleIdx];
-            pipelineStageTitleTv.SetTextColor(isCompleted ? OneUiTheme.FunctionalGreen : OneUiTheme.PrimaryHigh);
-        }
-        if (pipelineStagePctTv != null) {
-            string elapsed = pipelineStartedUtc != DateTime.MinValue
-                ? $" · {Math.Max(0, (int)(DateTime.UtcNow - pipelineStartedUtc).TotalSeconds)}s"
-                : "";
-            if (isCompleted) {
-                pipelineStagePctTv.Text = $"100%{elapsed}";
-                pipelineStagePctTv.SetTextColor(OneUiTheme.FunctionalGreen);
-            } else if (progress < 0) {
-                pipelineStagePctTv.Text = $"...{elapsed}";
-                pipelineStagePctTv.SetTextColor(OneUiTheme.PrimaryHigh);
-            } else {
-                int pct = Math.Clamp((int)Math.Round(progress * 100.0), 0, 100);
-                pipelineStagePctTv.Text = $"{pct}%{elapsed}";
-                pipelineStagePctTv.SetTextColor(OneUiTheme.TextPrimary);
-            }
-        }
-        for (int i = 0; i < 4; i++) {
-            bool stepDone = isCompleted || i < activeStage;
-            bool stepActive = !isCompleted && i == activeStage;
-            if (pipelineStageBars[i] != null) {
-                Color barCol = stepDone
-                    ? OneUiTheme.FunctionalGreen
-                    : (stepActive ? OneUiTheme.PrimaryHigh : OneUiTheme.SurfaceModalRow);
-                pipelineStageBars[i].Background = OneUiTheme.CreateRoundedDrawable(this, barCol, 4f);
-            }
-            if (pipelineStageLabels[i] != null) {
-                Color lblCol = stepDone
-                    ? OneUiTheme.FunctionalGreen
-                    : (stepActive ? OneUiTheme.TextPrimary : ColMuted);
-                pipelineStageLabels[i].SetTextColor(lblCol);
-                pipelineStageLabels[i].SetTypeface(null, stepActive ? TypefaceStyle.Bold : TypefaceStyle.Normal);
-            }
-        }
-    }
-
-    void HideLastExportActionBar() {
-        if (locateExportBtn != null) locateExportBtn.Visibility = ViewStates.Gone;
-        if (shareExportBtn != null) shareExportBtn.Visibility = ViewStates.Gone;
-        if (playExportBtn != null) playExportBtn.Visibility = ViewStates.Gone;
-        if (lastExportPathText != null) lastExportPathText.Visibility = ViewStates.Gone;
-    }
-
-    void ShowPublishedExportActions(ExportPublishResult publish, string fallbackFilePath) {
-        lastExportContentUri = publish?.ContentUri;
-        lastRenderedFilePath = !string.IsNullOrEmpty(publish?.LocalPath) && File.Exists(publish.LocalPath)
-            ? publish.LocalPath
-            : (!string.IsNullOrEmpty(fallbackFilePath) && File.Exists(fallbackFilePath) ? fallbackFilePath : "");
-        lastExportFolderAbsPath = !string.IsNullOrEmpty(publish?.PublicFolderAbsolutePath)
-            ? publish.PublicFolderAbsolutePath
-            : (!string.IsNullOrEmpty(lastRenderedFilePath) ? Path.GetDirectoryName(lastRenderedFilePath) ?? "" : "");
-        if (!string.IsNullOrEmpty(publish?.PublicDisplayPath)) {
-            lastExportPublicDisplayPath = publish.PublicDisplayPath;
-        } else {
-            string fileName = !string.IsNullOrEmpty(lastRenderedFilePath) ? Path.GetFileName(lastRenderedFilePath) : "";
-            string folderRel = !string.IsNullOrEmpty(publish?.FolderDisplayPath)
-                ? publish.FolderDisplayPath
-                : (GetSelectedExportDestination() == ExportStorageDestination.DownloadsCavernize ? "Download/Cavernize" : "Music/Cavernize");
-            lastExportPublicDisplayPath = !string.IsNullOrEmpty(fileName) ? $"{folderRel}/{fileName}" : folderRel;
-        }
-
-        if (lastExportPathText != null) {
-            string msg = string.Format(S["ExportSavedToFmt"], lastExportPublicDisplayPath);
-            if (publish?.RoutedToDownloadsForContainerCompat == true) {
-                msg += $" · {S["ExportCompatDownloadsBadge"]}";
-            }
-            lastExportPathText.Text = msg;
-            lastExportPathText.Visibility = ViewStates.Visible;
-        }
-        bool hasFileOrUri = !string.IsNullOrEmpty(lastRenderedFilePath) || lastExportContentUri != null;
-        if (locateExportBtn != null) locateExportBtn.Visibility = hasFileOrUri ? ViewStates.Visible : ViewStates.Gone;
-        if (shareExportBtn != null) shareExportBtn.Visibility = hasFileOrUri ? ViewStates.Visible : ViewStates.Gone;
-        if (playExportBtn != null) playExportBtn.Visibility = hasFileOrUri ? ViewStates.Visible : ViewStates.Gone;
-    }
-
-    void OnLocateExportClicked() {
-        string folderRel = lastExportPublicDisplayPath.StartsWith("Download/", StringComparison.OrdinalIgnoreCase)
-            ? "Download/Cavernize"
-            : "Music/Cavernize";
-        bool openedSystemFiles = false;
-        if (OperatingSystem.IsAndroidVersionAtLeast(26)) {
-            try {
-                Android.Net.Uri docUri = Android.Provider.DocumentsContract.BuildDocumentUri(
-                    "com.android.externalstorage.documents",
-                    $"primary:{folderRel}");
-                if (docUri != null) {
-                    Intent viewDir = new(Intent.ActionView);
-                    viewDir.SetDataAndType(docUri, "vnd.android.document/directory");
-                    viewDir.AddFlags(ActivityFlags.GrantReadUriPermission | ActivityFlags.NewTask);
-                    StartActivity(viewDir);
-                    openedSystemFiles = true;
-                }
-            } catch (Exception ex) {
-                AppLogger.Info($"Locate system folder intent fallback: {ex.Message}");
-            }
-        }
-        if (openedSystemFiles) {
-            Toast.MakeText(this, string.Format(S["ExportSavedToFmt"], lastExportPublicDisplayPath), ToastLength.Short).Show();
-            return;
-        }
-
-        string initDir = !string.IsNullOrEmpty(lastExportFolderAbsPath) && Directory.Exists(lastExportFolderAbsPath)
-            ? lastExportFolderAbsPath
-            : AndroidFileHelper.GetPublicExportFolderAbsolutePath(
-                folderRel.StartsWith("Download/", StringComparison.OrdinalIgnoreCase)
-                    ? ExportStorageDestination.DownloadsCavernize
-                    : ExportStorageDestination.MusicCavernize);
-        Toast.MakeText(this, string.Format(S["ExportSavedToFmt"], lastExportPublicDisplayPath), ToastLength.Long).Show();
-        if (!string.IsNullOrEmpty(initDir) && Directory.Exists(initDir)) {
-            OneUiFileExplorerDialog.Show(this, new FileExplorerOptions {
-                Title = S["LocateExportTitle"],
-                Mode = ExplorerPickMode.SingleFile,
-                AllowAllFiles = true,
-                InitialDirectory = initDir,
-                ConfirmLabel = S["OpenPlayer"],
-                OnConfirm = paths => {
-                    if (paths != null && paths.Count > 0 && File.Exists(paths[0])) {
-                        OpenLocalPathWithFallbackAsync(paths[0], switchToTab: 0);
-                    }
-                }
-            });
-        }
-    }
-
-    void OnShareLastExportClicked() {
-        if (lastExportContentUri != null) {
-            try {
-                string mime = !string.IsNullOrEmpty(lastExportPublicDisplayPath)
-                    ? AndroidFileHelper.GetMimeType(lastExportPublicDisplayPath)
-                    : "audio/*";
-                Intent share = new(Intent.ActionSend);
-                share.SetType(mime);
-                share.PutExtra(Intent.ExtraStream, lastExportContentUri);
-                share.AddFlags(ActivityFlags.GrantReadUriPermission);
-                StartActivity(Intent.CreateChooser(share, S["ShareFile"]));
-                return;
-            } catch (Exception ex) {
-                AppLogger.Warn($"Share ContentUri fallback: {ex.Message}");
-            }
-        }
-        ShareLocalFile(lastRenderedFilePath);
-    }
-
-    void OnPlayLastExportClicked() {
-        if (!string.IsNullOrEmpty(lastRenderedFilePath) && File.Exists(lastRenderedFilePath)) {
-            OpenLocalPathWithFallbackAsync(lastRenderedFilePath, switchToTab: 0);
-            return;
-        }
-        if (lastExportContentUri != null) {
-            SwitchTab(0);
-            LoadUriAsync(lastExportContentUri);
-        }
-    }
-
-    void ShareLocalFile(string path) {
-        if (string.IsNullOrEmpty(path) || !File.Exists(path)) {
-            return;
-        }
-        Android.Net.Uri uri = AndroidFileHelper.GetShareableUri(this, path);
-        if (uri == null) {
-            return;
-        }
-        Intent share = new(Intent.ActionSend);
-        share.SetType(path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".log", StringComparison.OrdinalIgnoreCase)
-            ? "text/plain"
-            : AndroidFileHelper.GetMimeType(path));
-        share.PutExtra(Intent.ExtraStream, uri);
-        share.AddFlags(ActivityFlags.GrantReadUriPermission);
-        StartActivity(Intent.CreateChooser(share, S["ShareFile"]));
     }
 }

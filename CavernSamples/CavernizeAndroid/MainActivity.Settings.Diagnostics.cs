@@ -68,8 +68,7 @@ public partial class MainActivity {
         TextView selfCheckTitle = Label(S["SelfCheckSectionTitle"], 13f, ColText);
         selfCheckTitle.SetTypeface(null, TypefaceStyle.Bold);
         selfCheckHeader.AddView(selfCheckTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        Button selfCheckHelpBtn = PillButton("?", () => ShowModalGuidedHelp(S["SelfCheckHelpTitle"], S["SelfCheckHelpBody"], OneUiIconType.Logs));
-        selfCheckHeader.AddView(selfCheckHelpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        selfCheckHeader.AddView(CreateInlineHelpBtn(S["SelfCheckHelpTitle"], S["SelfCheckHelpBody"]));
         logCard.AddView(selfCheckHeader);
 
         selfCheckStatusText = Label("", 11.5f, OneUiTheme.TextSub);
@@ -92,8 +91,7 @@ public partial class MainActivity {
         TextView omniTitle = Label(S["OmniBridgeSectionTitle"], 13f, ColText);
         omniTitle.SetTypeface(null, TypefaceStyle.Bold);
         omniHeader.AddView(omniTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        Button omniHelpBtn = PillButton("?", () => ShowModalGuidedHelp(S["OmniBridgeHelpTitle"], S["OmniBridgeHelpBody"], OneUiIconType.Logs));
-        omniHeader.AddView(omniHelpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        omniHeader.AddView(CreateInlineHelpBtn(S["OmniBridgeHelpTitle"], S["OmniBridgeHelpBody"]));
         logCard.AddView(omniHeader);
 
         omniBridgeStatusText = Label("", 11.5f, OneUiTheme.TextSub);
@@ -108,7 +106,8 @@ public partial class MainActivity {
         logCard.AddView(omniBtns);
 
         RefreshLogSummaryLabel();
-        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck ultra audit ui test pairwise bridge live cloudflare relay hub telemetry biometric fingerprint wake standby omniagent ipc");
+        diagnosticsDeveloperCardRef = logCard;
+        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: true, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck ultra audit ui test pairwise bridge live cloudflare relay hub telemetry biometric fingerprint wake standby omniagent ipc");
 
     }
 

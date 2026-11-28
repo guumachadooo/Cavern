@@ -1832,5 +1832,37 @@ public sealed partial class AndroidStrings {
         d["AiPickerAppliedToastFmt"] = "Modelo IA ativo: {0} ({1})";
         d["AiPickerActiveModelFmt"] = "Modelo IA: {0}";
         d["AiPickerNeedDownloadToast"] = "Baixe ou importe '{0}' primeiro em Modelos e Cache.";
+        d["TabLibrary"] = "Biblioteca";
+        d["TabSound"] = "Som";
+        d["TabExport"] = "Exportar";
+        d["NowPlayingCoverTab"] = "Capa";
+        d["NowPlayingLyricsTab"] = "Letras";
+        d["NowPlaying3dStageTab"] = "Palco 3D";
+        d["MiniPlayerTapHint"] = "Toque para abrir Tocando Agora";
+        d["PlayerNoTrackTitle"] = "Nenhuma faixa tocando";
+        d["SoundHubPresetOutputTitle"] = "Predefinição e Saída";
+        d["SoundHub3dSpaceTitle"] = "3D e Espaço";
+        d["SoundHubAiStemsTitle"] = "Stems IA e Voz";
+        d["SoundHubHeadphonesHwTitle"] = "Fones e Hardware";
+        d["SoundHubSpatialQuickBtn"] = "Espacial";
+        d["SoundHubConfigureBtn"] = "Configurar";
+        d["SpatialActiveShort"] = "3D Ativo";
+        d["SpatialOffShort"] = "3D Deslig.";
+        d["SpeakerXtcOnShort"] = "XTC Falante On";
+        d["SpeakerXtcOffShort"] = "XTC Falante Off";
+        d["AutoEqSelectBtn"] = "Perfil AutoEQ";
+        d["NeuralProLabSectionTitle"] = "Laboratório Neural e Diagnóstico";
+        d["AppSettingsPrefsTitle"] = "Preferências do App";
+        d["AppSettingsSheetSub"] = "Idioma, modo Pro Lab, motores, atualizações e sobre.";
+        d["AppSettingsProLabToggle"] = "Modo Pro Lab (DSP avançado e Raio-X)";
+        d["AppSettingsDevModeToggle"] = "Modo desenvolvedor e diagnóstico";
+        d["AppSettingsOpenDevSubPageBtn"] = "Abrir Desenvolvedor e Diagnóstico";
+        d["DevSubPageTitle"] = "Desenvolvedor e Diagnóstico";
+        d["DevSubPageSub"] = "Autoauditoria, Live Bridge, logs e telemetria.";
+        d["ExportSubModeMaster"] = "Masterizar";
+        d["ExportSubModeConvert"] = "Converter";
+        d["ExportSubModeExtract"] = "Extrair";
+        d["ExportQueueCountFmt"] = "Fila ({0})";
+        d["QueueEmpty"] = "Nenhum item na fila de exportação.";
     }
 }

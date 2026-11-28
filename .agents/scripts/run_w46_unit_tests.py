@@ -5488,7 +5488,7 @@ def _py_stage3_audio_ai_mvsep_cntc_contracts() -> None:
     for tok in ("ShowMvsepCloudConfigModal", "ShowNeuralTrackCacheBrowserModal", "neuralExecBackendSelector", "neuralStudioBundleSelector", "neuralTrackCacheEnabledSwitch"):
         assert tok in settings_neural, f"Missing {tok} in MainActivity.Settings.Neural.cs"
 
-    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.Cache.cs").read_text(encoding="utf-8")
     for tok in ("CanUseMvsepCloud", "TogglePureInstrumentalMode", "DecodeTempStemBytesWithFfmpeg", "MvsepCloudClient"):
         assert tok in wf_src, f"Missing {tok} in MainActivity.NeuralWorkflows.cs"
 
@@ -5501,7 +5501,7 @@ def _py_stage3_audio_ai_mvsep_cntc_contracts() -> None:
     for tok in ("musicLyricsPureInstrBtn", "TogglePureInstrumentalMode"):
         assert tok in pm_core, f"Missing {tok} in MainActivity.PlayerMusic.Core.cs"
 
-    np_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8")
+    np_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NowPlayingSheet.cs").read_text(encoding="utf-8")
     for tok in ("musicLyricsPureInstrBtn", "SingDockPureInstrChip", "SingDockKeepBackingChip"):
         assert tok in np_src, f"Missing {tok} in MainActivity.PlayerMusic.NowPlaying.cs"
 
@@ -5558,16 +5558,28 @@ def _py_stage4_ux_motion_orbit_lyrics_contracts() -> None:
 
     main_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.cs").read_text(encoding="utf-8")
     nav_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Navigation.cs").read_text(encoding="utf-8")
-    assert "workspaceChromeHost" in main_src and "CreateWorkspaceSourceBar()" in main_src, (
-        "MainActivity.cs must hoist a single persistent workspaceChromeHost containing CreateWorkspaceSourceBar()."
+    export_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.ExportTab.cs").read_text(encoding="utf-8")
+    sheet_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NowPlayingSheet.cs").read_text(encoding="utf-8")
+    sound_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.SoundHub.cs").read_text(encoding="utf-8")
+    assert "BuildTopShellHeader()" in main_src and "BuildPersistentMiniPlayerBar(" in main_src and "BuildNowPlayingSheetOverlay(" in main_src, (
+        "MainActivity.cs must wire the W55.4 3-Tab One UI 9 Shell (Top Header, Persistent Mini-Player, Now Playing Sheet)."
     )
-    for tok in ("UpdateWorkspaceChromeVisibility", "crossingPlayBoundary", "workspaceChromeAnimGen"):
+    assert "CreateWorkspaceSourceBar()" in export_src, (
+        "MainActivity.ExportTab.cs must host the local Source File bar (replacing removed global workspaceChromeHost)."
+    )
+    for tok in ("UpdateWorkspaceChromeVisibility", "UpdateTopShellHeaderTitle", "workspaceChromeAnimGen"):
         assert tok in nav_src, f"Missing {tok} in MainActivity.Navigation.cs"
+    assert "OpenNowPlayingSheet" in sheet_src and "SelectNowPlayingSubView" in sheet_src, (
+        "MainActivity.NowPlayingSheet.cs must provide OpenNowPlayingSheet & SelectNowPlayingSubView."
+    )
+    assert "BuildSoundHubTab" in sound_src and "ShowAppSettingsSheet" in sound_src, (
+        "MainActivity.SoundHub.cs must provide BuildSoundHubTab & ShowAppSettingsSheet."
+    )
 
     for tab_file in ("MainActivity.PlayerTab.cs", "MainActivity.ConverterTab.cs", "MainActivity.ExtractorTab.cs"):
         tab_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / tab_file).read_text(encoding="utf-8")
         assert "CreateWorkspaceSourceBar()" not in tab_src, (
-            f"{tab_file} must NOT duplicate CreateWorkspaceSourceBar() (hoisted into persistent workspaceChromeHost)."
+            f"{tab_file} must NOT duplicate CreateWorkspaceSourceBar() (lives locally in MainActivity.ExportTab.cs)."
         )
 
     player_tab = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerTab.cs").read_text(encoding="utf-8")
@@ -5577,7 +5589,7 @@ def _py_stage4_ux_motion_orbit_lyrics_contracts() -> None:
 
     pm_core = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Core.cs").read_text(encoding="utf-8")
     pm_np = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8")
-    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.Cache.cs").read_text(encoding="utf-8")
     ui_helpers = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.UiHelpers.cs").read_text(encoding="utf-8")
 
     assert "musicUpmixToggleBtn" in pm_core and "musicUpmixToggleBtn" in pm_np, "Missing unified musicUpmixToggleBtn in Play tab"
@@ -5763,7 +5775,7 @@ def _py_stage7_ui_ai_org_motion_stability_contracts() -> None:
     cache_svc = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NeuralTrackCacheService.cs").read_text(encoding="utf-8")
     for tok in ("TryLoadBestForSourceTrack", "ScoreCacheEntryMatch", "ExtractNormalizedFileStem", "LosslessResidualRestore"):
         assert tok in cache_svc, f"Q2 failed: missing {tok} in NeuralTrackCacheService.cs"
-    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.Cache.cs").read_text(encoding="utf-8")
     for tok in ("TryLoadBestForSourceTrack", "bool forceReextract = false", "AiCacheReextractCurrentBtn", "OpenAiSettingsBtn", "JumpToSettingsCategory(2)"):
         assert tok in wf_src, f"Q2/Q4 failed: missing {tok} in MainActivity.NeuralWorkflows.cs"
 
@@ -5774,7 +5786,7 @@ def _py_stage7_ui_ai_org_motion_stability_contracts() -> None:
     nav_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Navigation.cs").read_text(encoding="utf-8")
     for tok in ("OneUiMotionBlur.EnableHardwareLayer", "OneUiMotionBlur.ClearHardwareLayer", "OneUiMotionBlur.ClearMotionBlur"):
         assert tok in nav_src, f"Q3/W51.4 failed: missing {tok} in MainActivity.Navigation.cs"
-    np_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8")
+    np_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NowPlayingSheet.cs").read_text(encoding="utf-8")
     for tok in ("OneUiMotionBlur.EnableHardwareLayer", "OneUiMotionBlur.ClearMotionBlur", "HideSoftInputFromWindow"):
         assert tok in np_src, f"Q3/W51.4 failed: missing {tok} in NowPlaying.cs"
     lib_views = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.LibraryViews.cs").read_text(encoding="utf-8")
@@ -5786,7 +5798,7 @@ def _py_stage7_ui_ai_org_motion_stability_contracts() -> None:
     # Log-audit stability regressions: CTS ownership, Scarlett/USB PhoneMic preservation + 140ms debounce, version-scoped SelfCheck
     for tok in ("myPrepCts.Dispose()", "myTwinCts.Dispose()", "catch (ObjectDisposedException)"):
         assert tok in wf_src, f"Stability regression: missing {tok} in MainActivity.NeuralWorkflows.cs"
-    audio_out = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8")
+    audio_out = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.TransportAndTelemetry.cs").read_text(encoding="utf-8")
     for tok in ("routeDebounceUntilMs", "proAudioConfig.MicSource != ProAudioMicSource.PhoneMic"):
         assert tok in audio_out, f"Stability regression: missing {tok} in AndroidAudioOutput.cs"
     diag_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "SelfDiagnosticEngine.cs").read_text(encoding="utf-8")
@@ -5853,7 +5865,7 @@ def _py_stage8_scarlett_proaudio_stability_contracts() -> None:
     assert "volatile UsbProAudioDeviceSnapshot snapshot" in usb_src and "volatile ScarlettHardwareState scarlettState" in usb_src, "BUG #5 regression: UsbProAudioDeviceManager snapshots must be volatile/lock-free"
     assert "EnsureScarlettHandshakeLocked" in usb_src and "attempt < 3" in usb_src, "BUG #7 regression: Scarlett Gen 4 FCP 3-attempt retry missing"
 
-    out_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8")
+    out_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.TransportAndTelemetry.cs").read_text(encoding="utf-8")
     for tok in ("activeHalBurstFrames", "adaptiveWatermarkBoostFrames", "lastObservedNativeXRuns", "needStartPlay", "WriteBlockZeroGc(preFrames)"):
         assert tok in out_src, f"BUG #2/#4 regression: missing {tok} in AndroidAudioOutput.cs"
     assert "transportAllowsLowLatTrack" in out_src, "BUG #2 regression: USB/BT AudioTrack must avoid fragile LowLatency mode"
@@ -5882,7 +5894,7 @@ def _py_stage8_scarlett_proaudio_stability_contracts() -> None:
 
 def _py_stage9_w51_vocal_cache_ux_loudness_volume_contracts() -> None:
     # W51.1: Zero-alloc vocal/backing toggle & no OOM ONNX cascade
-    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.Cache.cs").read_text(encoding="utf-8")
     m_toggle = re.search(r"void TogglePureInstrumentalMode\([^\)]*\)\s*\{(.*?)\n    \}", wf_src, re.S)
     assert m_toggle is not None, "W51.1: TogglePureInstrumentalMode not found"
     assert "PrepareActiveTrackNeuralStemsAsync" not in m_toggle.group(1), (
@@ -5930,7 +5942,7 @@ def _py_stage9_w51_vocal_cache_ux_loudness_volume_contracts() -> None:
 
     # W51.5: First-3s startup stutter elimination
     loader_v42_src = loader_src + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.SpatialV42.cs").read_text(encoding="utf-8")
-    out_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8")
+    out_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.TransportAndTelemetry.cs").read_text(encoding="utf-8")
     assert "PreFillNativePlaybackRing(" in out_src, "W51.5 missing PreFillNativePlaybackRing in AndroidAudioOutput.cs"
     assert "startupDelayMs: 1400" in loader_v42_src, "W51.5 missing staggered LGSR startupDelayMs"
 
@@ -5986,7 +5998,7 @@ def _py_stage10_onnx_low_ram_discipline_and_qa_contracts() -> None:
     for tok in ("bool preferLightweightOnly = false", "WithMemorySafeFallback()", "UsedMemorySafeFallback", "ArePlanModelsIdentical"):
         assert tok in orch_src, f"Missing '{tok}' in NeuralPipelineOrchestrator.cs"
 
-    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.Cache.cs").read_text(encoding="utf-8")
     for tok in ("UsedMemorySafeFallback", "NeuralLowRamFallbackToast", "catch (InsufficientMemoryException", "NeuralLowRamNeedLightModelFmt"):
         assert tok in wf_src, f"Missing '{tok}' in MainActivity.NeuralWorkflows.cs"
 
@@ -6037,7 +6049,7 @@ def _py_stage11_w53_1_wave_a_contracts() -> None:
     proc_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "Adapters" / "NeuralStemStageProcessor.cs").read_text(encoding="utf-8")
     assert "public double ReferenceDriftPpm" in proc_src and "referenceDriftPpm" in proc_src, "W53.1 B3 missing ReferenceDriftPpm in NeuralStemStageProcessor.cs"
 
-    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.Cache.cs").read_text(encoding="utf-8")
     for tok in ("SeparateTwoStageCascadeAsync", "CrossVariantVocalAligner.Align", ":s1", ":s2", "ReferenceDriftPpm"):
         assert tok in wf_src, f"W53.1 B3/B4 missing '{tok}' in MainActivity.NeuralWorkflows.cs"
 
@@ -6071,7 +6083,7 @@ def _py_stage12_w53_2_w53_3_wave_b_wave_c_contracts() -> None:
     for tok in ("TryFindBestReusableVocalTrack", "OptimizeCacheStorage"):
         assert tok in cache_src, f"W53.2 Wave B missing '{tok}' in NeuralTrackCacheService.cs"
 
-    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.Cache.cs").read_text(encoding="utf-8")
     for tok in (
         "ShowUnifiedAiExtractionSheet",
         "ActivateCachedVariantAsync",
@@ -6185,7 +6197,7 @@ def _py_stage14_v4_1_reform_p0_contracts() -> None:
     assert "void ConfirmDestructiveAction(" in ui_helpers, "V4.1 ConfirmDestructiveAction helper missing in MainActivity.UiHelpers.cs"
     neural_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Neural.cs").read_text(encoding="utf-8")
     assert neural_ui.count("ConfirmDestructiveAction(") >= 7, "V4.1 MainActivity.Settings.Neural.cs must guard all 7 destructive actions with ConfirmDestructiveAction"
-    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8") + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.Cache.cs").read_text(encoding="utf-8")
     assert wf_src.count("ConfirmDestructiveAction(") >= 2, "V4.1 MainActivity.NeuralWorkflows.cs must guard variant/track cache deletions with ConfirmDestructiveAction"
     core_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Core.cs").read_text(encoding="utf-8")
     assert "ConfirmDestructiveAction(" in core_ui, "V4.1 MainActivity.Settings.Core.cs must guard queue removal with ConfirmDestructiveAction"

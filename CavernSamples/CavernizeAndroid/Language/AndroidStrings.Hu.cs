@@ -275,5 +275,37 @@ public sealed partial class AndroidStrings {
         d["AiPickerAppliedToastFmt"] = "Aktív MI-modell: {0} ({1})";
         d["AiPickerActiveModelFmt"] = "MI-modell: {0}";
         d["AiPickerNeedDownloadToast"] = "Előbb töltse le vagy importálja a(z) '{0}' modellt.";
+        d["TabLibrary"] = "Könyvtár";
+        d["TabSound"] = "Hang";
+        d["TabExport"] = "Exportálás";
+        d["NowPlayingCoverTab"] = "Borító";
+        d["NowPlayingLyricsTab"] = "Dalszöveg";
+        d["NowPlaying3dStageTab"] = "3D Színpad";
+        d["MiniPlayerTapHint"] = "Érintse meg a lejátszóhoz";
+        d["PlayerNoTrackTitle"] = "Nincs lejátszott szám";
+        d["SoundHubPresetOutputTitle"] = "Profil és Kimenet";
+        d["SoundHub3dSpaceTitle"] = "3D és Tér";
+        d["SoundHubAiStemsTitle"] = "AI Sávok és Ének";
+        d["SoundHubHeadphonesHwTitle"] = "Fejhallgató és Hardver";
+        d["SoundHubSpatialQuickBtn"] = "Térhangzás";
+        d["SoundHubConfigureBtn"] = "Beállítás";
+        d["SpatialActiveShort"] = "3D Be";
+        d["SpatialOffShort"] = "3D Ki";
+        d["SpeakerXtcOnShort"] = "Hangszóró XTC Be";
+        d["SpeakerXtcOffShort"] = "Hangszóró XTC Ki";
+        d["AutoEqSelectBtn"] = "AutoEQ Profil";
+        d["NeuralProLabSectionTitle"] = "Neurális Labor és Diagnosztika";
+        d["AppSettingsPrefsTitle"] = "Alkalmazás Beállítások";
+        d["AppSettingsSheetSub"] = "Nyelv, Pro Lab mód, motorok, frissítések és névjegy.";
+        d["AppSettingsProLabToggle"] = "Pro Lab mód (haladó DSP és Röntgen)";
+        d["AppSettingsDevModeToggle"] = "Fejlesztői és diagnosztikai mód";
+        d["AppSettingsOpenDevSubPageBtn"] = "Fejlesztői és Diagnosztika megnyitása";
+        d["DevSubPageTitle"] = "Fejlesztői és Diagnosztika";
+        d["DevSubPageSub"] = "Önaudit, Live Bridge, naplók és hardver telemetria.";
+        d["ExportSubModeMaster"] = "Master";
+        d["ExportSubModeConvert"] = "Konvertálás";
+        d["ExportSubModeExtract"] = "Kinyerés";
+        d["ExportQueueCountFmt"] = "Várólista ({0})";
+        d["QueueEmpty"] = "Nincs elem az exportálási várólistán.";
     }
 }

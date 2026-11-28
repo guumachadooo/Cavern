@@ -406,7 +406,7 @@ public partial class MainActivity {
         double totSec = playerEngine?.TotalSeconds ?? 0;
 
         musicArtworkView?.SetPlaying(isPlaying);
-        if (musicStageMode == PlayerStageMode.Video && ((activeTab == 0 && !isLibrarySectionOpen) || fullscreenVideoDlg != null)) {
+        if (musicStageMode == PlayerStageMode.Video && (isNowPlayingSheetOpen || fullscreenVideoDlg != null)) {
             string trkStr = LoadedFile != null && LoadedFile.Tracks.Count > 1
                 ? $"{Math.Max(1, LoadedFile.Tracks.ToList().IndexOf(selectedTrack) + 1)}/{LoadedFile.Tracks.Count}"
                 : "";
@@ -419,7 +419,7 @@ public partial class MainActivity {
                 activeSubtitleCues.Count > 0,
                 playerEngine?.Loop ?? false,
                 S["VideoUnlockHint"]);
-        } else if (musicStageMode == PlayerStageMode.Lyrics && activeTab == 0 && !isLibrarySectionOpen) {
+        } else if (musicStageMode == PlayerStageMode.Lyrics && isNowPlayingSheetOpen) {
             musicLyricsView?.UpdatePlayback(lyricsSec, isPlaying);
         }
         if (musicPlayIcon != null) {

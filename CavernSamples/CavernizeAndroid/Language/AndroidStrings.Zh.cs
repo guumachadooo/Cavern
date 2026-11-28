@@ -275,5 +275,37 @@ public sealed partial class AndroidStrings {
         d["AiPickerAppliedToastFmt"] = "已启用 AI 模型: {0} ({1})";
         d["AiPickerActiveModelFmt"] = "AI 模型: {0}";
         d["AiPickerNeedDownloadToast"] = "请先在“模型与缓存”中下载或导入“{0}”。";
+        d["TabLibrary"] = "资料库";
+        d["TabSound"] = "音效";
+        d["TabExport"] = "导出";
+        d["NowPlayingCoverTab"] = "封面";
+        d["NowPlayingLyricsTab"] = "歌词";
+        d["NowPlaying3dStageTab"] = "3D 舞台";
+        d["MiniPlayerTapHint"] = "点击打开正在播放";
+        d["PlayerNoTrackTitle"] = "当前无播放曲目";
+        d["SoundHubPresetOutputTitle"] = "预设与输出";
+        d["SoundHub3dSpaceTitle"] = "3D 与空间";
+        d["SoundHubAiStemsTitle"] = "AI 分轨与人声";
+        d["SoundHubHeadphonesHwTitle"] = "耳机与硬件";
+        d["SoundHubSpatialQuickBtn"] = "空间音效";
+        d["SoundHubConfigureBtn"] = "配置";
+        d["SpatialActiveShort"] = "3D 已开";
+        d["SpatialOffShort"] = "3D 已关";
+        d["SpeakerXtcOnShort"] = "扬声器 XTC 开";
+        d["SpeakerXtcOffShort"] = "扬声器 XTC 关";
+        d["AutoEqSelectBtn"] = "AutoEQ 配置";
+        d["NeuralProLabSectionTitle"] = "神经网络实验室与诊断";
+        d["AppSettingsPrefsTitle"] = "应用偏好设置";
+        d["AppSettingsSheetSub"] = "语言、Pro Lab 模式、引擎、更新与关于。";
+        d["AppSettingsProLabToggle"] = "Pro Lab 模式（高级 DSP 与透视）";
+        d["AppSettingsDevModeToggle"] = "开发者与诊断模式";
+        d["AppSettingsOpenDevSubPageBtn"] = "打开开发者与诊断";
+        d["DevSubPageTitle"] = "开发者与诊断";
+        d["DevSubPageSub"] = "自检、Live Bridge、日志与硬件遥测。";
+        d["ExportSubModeMaster"] = "母带";
+        d["ExportSubModeConvert"] = "转换";
+        d["ExportSubModeExtract"] = "提取";
+        d["ExportQueueCountFmt"] = "队列 ({0})";
+        d["QueueEmpty"] = "导出队列为空。";
     }
 }

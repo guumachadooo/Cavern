@@ -218,7 +218,7 @@ public partial class MainActivity {
 
     PlayerStageMode musicStageMode = PlayerStageMode.Cover;
     string lastStageBoundPath;
-    bool isLibrarySectionOpen;
+    bool isLibrarySectionOpen = true;
     LibraryCategory libraryCategory = LibraryCategory.Albums;
     LibraryAlbumGroup selectedLibraryAlbum;
     string selectedLibraryArtist;
@@ -239,7 +239,6 @@ public partial class MainActivity {
     LinearLayout musicNowPlayingSection;
     ScrollView musicLibraryScrollView;
     LinearLayout musicLibrarySection;
-    TextView segNowPlayingBtn, segLibraryBtn;
 
     // Library controls & cached filtered/sorted index
     EditText librarySearchInput;
@@ -354,43 +353,7 @@ public partial class MainActivity {
         Typeface sfSemi = OneUiTheme.GetAppleFontSemibold(this);
         Typeface sfReg = OneUiTheme.GetAppleFontRegular(this);
 
-        // 0. Top Sub-Section Capsule Switcher inside Play Tab: [ Tocando Agora | Biblioteca ]
-        LinearLayout segWrap = new(this) {
-            Orientation = Orientation.Horizontal,
-            BaselineAligned = false
-        };
-        segWrap.SetPadding(Dp(3), Dp(3), Dp(3), Dp(3));
-        segWrap.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(46, 255, 255, 255), 999f, Color.Argb(38, 255, 255, 255), 1f);
-
-        segNowPlayingBtn = new TextView(this) {
-            Text = S["PlayerNowPlaying"],
-            TextSize = 12f,
-            Gravity = GravityFlags.Center
-        };
-        segNowPlayingBtn.SetTypeface(sfSemi, TypefaceStyle.Bold);
-        segNowPlayingBtn.SetSingleLine(true);
-        segNowPlayingBtn.Ellipsize = TextUtils.TruncateAt.End;
-        segNowPlayingBtn.SetPadding(Dp(12), Dp(5), Dp(12), Dp(5));
-        OneUiTheme.AttachRecoil(segNowPlayingBtn, 0.94f);
-        segNowPlayingBtn.Click += (_, _) => SetMusicPlayerSection(openLibrary: false);
-
-        segLibraryBtn = new TextView(this) {
-            Text = S["PlayerLibrary"],
-            TextSize = 12f,
-            Gravity = GravityFlags.Center
-        };
-        segLibraryBtn.SetTypeface(sfSemi, TypefaceStyle.Bold);
-        segLibraryBtn.SetSingleLine(true);
-        segLibraryBtn.Ellipsize = TextUtils.TruncateAt.End;
-        segLibraryBtn.SetPadding(Dp(12), Dp(5), Dp(12), Dp(5));
-        OneUiTheme.AttachRecoil(segLibraryBtn, 0.94f);
-        segLibraryBtn.Click += (_, _) => SetMusicPlayerSection(openLibrary: true);
-
-        segWrap.AddView(segNowPlayingBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        segWrap.AddView(segLibraryBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        page.AddView(segWrap, new LinearLayout.LayoutParams(Dp(236), ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(6)
-        });
+        // W55.4.1: Tab 0 is Library directly; Now Playing lives in the Full-Screen Now Playing Sheet (Cover | Lyrics | 3D Stage).
 
         // ============================================================
         // SECTION A: NOW PLAYING (Zero-Scroll Exact Viewport Fit)
@@ -655,6 +618,7 @@ public partial class MainActivity {
         singChipsRow.AddView(musicLyricsVocalAbBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
 
         musicLyricsScarlettBtn = MakeSingDockChip(S["SingScarlettQuickBtn"], ShowScarlett2i2ControlsModal);
+        musicLyricsScarlettBtn.Visibility = ViewStates.Gone; // Shown only when a USB audio interface is connected
         singChipsRow.AddView(musicLyricsScarlettBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
 
         musicLyricsAiPrepBtn = MakeSingDockChip(S["NeuralPrepBtn"], () =>
@@ -968,7 +932,7 @@ public partial class MainActivity {
             TopMargin = Dp(4),
             RightMargin = Dp(7)
         });
-        musicBottomMoreBtn.Click += (_, _) => SwitchTab(1);
+        musicBottomMoreBtn.Click += (_, _) => SelectNowPlayingSubView(2);
         musicBottomMoreBtn.LongClick += (_, ev) => {
             ShowModularLayoutEditorDialog(isRoomTab: false);
             ev.Handled = true;
@@ -1003,23 +967,22 @@ public partial class MainActivity {
             FillViewport = true,
             VerticalScrollBarEnabled = false,
             OverScrollMode = OverScrollMode.Never,
-            Visibility = ViewStates.Gone
+            Visibility = ViewStates.Visible
         };
         musicLibraryScrollView.SetClipToPadding(false);
-        musicLibraryScrollView.SetPadding(0, 0, 0, Dp(106));
-        musicLibraryScrollView.ScrollChange += (_, _) => navFrostedHost?.ScheduleDeferredBlur(180);
+        musicLibraryScrollView.SetPadding(0, 0, 0, Dp(162));
+        musicLibraryScrollView.ScrollChange += (_, _) => {
+            navFrostedHost?.ScheduleDeferredBlur(180);
+            miniPlayerBarHost?.ScheduleDeferredBlur(180);
+        };
         musicLibraryScrollView.AddView(musicLibrarySection, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
             ViewGroup.LayoutParams.WrapContent));
 
-        // Overlay stack ensures Now Playing & Library always share 100% viewport height during horizontal slide
-        // (never splitting vertically 50/50 inside the parent vertical LinearLayout).
+        // Tab 0 hosts Library directly; musicNowPlayingScrollView is mounted in BuildNowPlayingSheetOverlay
         musicSectionStack = new FrameLayout(this);
         musicSectionStack.SetClipChildren(false);
         musicSectionStack.SetClipToPadding(false);
-        musicSectionStack.AddView(musicNowPlayingScrollView, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent,
-            ViewGroup.LayoutParams.MatchParent));
         musicSectionStack.AddView(musicLibraryScrollView, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
             ViewGroup.LayoutParams.MatchParent));
@@ -1043,11 +1006,12 @@ public partial class MainActivity {
             return;
         }
         // Never shrink Now Playing layout while hidden behind Library (avoids stale/transient inset squishing)
-        if (isLibrarySectionOpen || musicNowPlayingScrollView?.Visibility != ViewStates.Visible) {
+        if (!isNowPlayingSheetOpen || musicNowPlayingScrollView?.Visibility != ViewStates.Visible) {
             return;
         }
-        int vpH = musicTabRootPage.Height;
-        int vpW = musicTabRootPage.Width;
+        View hostView = (View)nowPlayingSheetContentHost ?? musicTabRootPage;
+        int vpH = hostView.Height;
+        int vpW = hostView.Width;
         if (vpH <= 0) {
             return;
         }

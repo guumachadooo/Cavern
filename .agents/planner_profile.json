@@ -20,16 +20,7 @@
     "warn_lines_all": 2000,
     "fail_lines": 2000,
     "split_target_lines": 1800,
-    "monolith_baseline": {
-      "CavernSamples/Reusable/Cavernize.Logic/Rendering/StudioBatchExporter.cs": 3578,
-      "CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs": 2383,
-      "CavernSamples/CavernizeAndroid/Audio/AndroidAudioOutput.cs": 2161,
-      "Cavern/Spatial/SpatialObjectCortex.cs": 2152,
-      "CavernSamples/CavernizeAndroid/Views/RoomSimulatorView.cs": 2094,
-      "CavernSamples/CavernizeAndroid/Services/MediaLibraryService.cs": 2046,
-      "CavernSamples/CavernizeAndroid/MainActivity.NeuralWorkflows.cs": 2027,
-      "CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs": 2013
-    }
+    "monolith_baseline": {}
   },
   "memory_weight_limits": {
     "project_history_max_lines": 150,
@@ -187,7 +178,7 @@
       "AGENTS.md",
       "CavernSamples/CavernizeAndroid/AGENTS.md"
     ],
-    "message": "Memory Feedback Reminder: multiple code files are modified in this commit without a recent update to `.agents/docs/PROJECT_HISTORY.md` or `.agents/docs/BUILD_LESSONS.md`. If this cycle fixed a non-obvious bug/build error, prepend a 1\u20134 line summary in `PROJECT_HISTORY.md` && run `python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py learn` to capture any new timeless build lesson (version-agnostic + dynamic lookup) before committing \u2014 or retry `git commit` if N/A."
+    "message": "Memory Feedback Reminder: multiple code files are modified in this commit without a recent update to `.agents/docs/PROJECT_HISTORY.md` or `.agents/docs/BUILD_LESSONS.md`. If this cycle fixed a non-obvious bug/build error, prepend a 1–4 line summary in `PROJECT_HISTORY.md` && run `python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py learn` to capture any new timeless build lesson (version-agnostic + dynamic lookup) before committing — or retry `git commit` if N/A."
   },
   "file_guards": [
     {
@@ -374,12 +365,7 @@
       "forbid_regex": "\\bnew\\s+(?:Android\\.Widget\\.)?CheckBox\\s*\\(",
       "severity": "fail",
       "baseline_max_matches": 0,
-      "baseline_per_file": {
-        "CavernSamples/CavernizeAndroid/MainActivity.ConverterTab.cs": 1,
-        "CavernSamples/CavernizeAndroid/MainActivity.ExtractorTab.cs": 2,
-        "CavernSamples/CavernizeAndroid/Services/LiveBridgeAuthActivity.cs": 1,
-        "CavernSamples/CavernizeAndroid/Views/OneUiFileExplorerDialog.cs": 1
-      },
+      "baseline_per_file": {},
       "message": "Legacy Android `CheckBox` violates One UI 9 canonical control grammar.",
       "remediation_hint": "Use `OneUiSwitch` or `OneUiSelectionChip` instead of `new CheckBox(...)` (UI-001)."
     },
@@ -391,9 +377,7 @@
       "forbid_regex": "(?:PillButton|CreatePillButton|ActionButton|CreateActionButton|Button)\\s*\\(\\s*\"\\?\"|Text\\s*=\\s*\"\\?\"",
       "severity": "fail",
       "baseline_max_matches": 0,
-      "baseline_per_file": {
-        "CavernSamples/CavernizeAndroid/MainActivity.Settings.Diagnostics.cs": 2
-      },
+      "baseline_per_file": {},
       "message": "Ad-hoc `\"?\"` help button pollutes One UI 9 chrome.",
       "remediation_hint": "Replace `\"?\"` button with concise subtitle/caption or `OneUiVectorIcons` info glyph (UI-002)."
     },
@@ -586,9 +570,9 @@
         "oneui",
         "ui",
         "layout",
-        "bot\u00e3o",
+        "botão",
         "botoes",
-        "bot\u00f5es",
+        "botões",
         "button*",
         "aba",
         "abas",
@@ -602,14 +586,14 @@
         "switch*",
         "modal",
         "dialog*",
-        "\u00edcone*",
+        "ícone*",
         "icone*",
         "icon*",
         "fonte*",
         "font*",
         "lyrics",
         "letra*",
-        "anima\u00e7*",
+        "animaç*",
         "animac*",
         "animat*",
         "canvas",
@@ -621,7 +605,7 @@
         "cor",
         "cores",
         "color*",
-        "tradu\u00e7*",
+        "traduç*",
         "traduc*",
         "pt-br",
         "androidstrings*",
@@ -756,11 +740,11 @@
         "targetsdk*",
         "filesdir",
         "ndk",
-        "bin\u00e1rio*",
+        "binário*",
         "binario*",
         "binary",
         "permiss*",
-        "notifica\u00e7*",
+        "notificaç*",
         "notificac*",
         "notification*",
         "mediasession",
@@ -819,9 +803,9 @@
       "keywords": [
         "biblioteca",
         "library",
-        "\u00e1lbum",
+        "álbum",
         "album",
-        "\u00e1lbuns",
+        "álbuns",
         "artista*",
         "artist*",
         "faixa*",
@@ -876,7 +860,7 @@
         "buildandroid*",
         "ota",
         "appupdate*",
-        "vers\u00e3o",
+        "versão",
         "versao",
         "version*",
         "commit",

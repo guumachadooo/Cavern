@@ -847,7 +847,7 @@ public partial class MainActivity : ILiveBridgeAppHost {
                     dlgs[^1].Dismiss();
                     return (true, JsonSerializer.Serialize(new { action, result = "dismissed top dialog" }));
                 }
-                if (activeTab == 4 && activeSettingsCategory >= 0) {
+                if (activeTab == 1 && activeSettingsCategory >= 0) {
                     OpenSettingsCategory(-1);
                     return (true, JsonSerializer.Serialize(new { action, result = "returned to Settings Hub" }));
                 }

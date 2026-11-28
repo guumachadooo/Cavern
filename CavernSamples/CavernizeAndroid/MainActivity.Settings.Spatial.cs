@@ -34,6 +34,11 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    LinearLayout ismDetailsSection;
+    LinearLayout airAbsDetailsSection;
+    LinearLayout biometricItdDetailsSection;
+    LinearLayout hptfNotchDetailsSection;
+    LinearLayout xtcDetailsSection;
     Switch transauralXtcSwitch, transauralHeadphoneBypassSwitch;
     OneUiInlineSelector transauralPresetSelector;
     OneUiSeekBar transauralStrengthBar;
@@ -58,6 +63,7 @@ public partial class MainActivity {
             ApplyAndRefreshExternalization();
         }, helpBody: S["TipIsmRoom"]);
 
+        ismDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         ismRoomPresetSelector = new OneUiInlineSelector(this, S["IsmRoomPresetTitle"]);
         string[] ismPresetLabels = [
             S["IsmPresetMastering"],
@@ -72,7 +78,7 @@ public partial class MainActivity {
             store.IsmRoomPresetIndex = pos;
             ApplyAndRefreshExternalization();
         };
-        externalizationDetailsSection.AddView(WrapControlWithHelp(ismRoomPresetSelector, S["IsmRoomPresetTitle"].TrimEnd(':'), S["TipIsmRoomPreset"], bottomMarginDp: 8));
+        ismDetailsSection.AddView(WrapControlWithHelp(ismRoomPresetSelector, S["IsmRoomPresetTitle"].TrimEnd(':'), S["TipIsmRoomPreset"], bottomMarginDp: 8));
 
         ismWallMaterialSelector = new OneUiInlineSelector(this, S["IsmWallMaterialTitle"]);
         string[] ismMaterialLabels = [
@@ -88,7 +94,7 @@ public partial class MainActivity {
             store.IsmWallMaterialIndex = pos;
             ApplyAndRefreshExternalization();
         };
-        externalizationDetailsSection.AddView(WrapControlWithHelp(ismWallMaterialSelector, S["IsmWallMaterialTitle"].TrimEnd(':'), S["TipIsmWallMaterial"], bottomMarginDp: 8));
+        ismDetailsSection.AddView(WrapControlWithHelp(ismWallMaterialSelector, S["IsmWallMaterialTitle"].TrimEnd(':'), S["TipIsmWallMaterial"], bottomMarginDp: 8));
 
         ismOrderSelector = new OneUiInlineSelector(this, S["IsmOrderTitle"]);
         string[] ismOrderLabels = [S["IsmOrder1"], S["IsmOrder2"]];
@@ -98,7 +104,7 @@ public partial class MainActivity {
             store.IsmReflectionOrder = pos == 0 ? 1 : 2;
             ApplyAndRefreshExternalization();
         };
-        externalizationDetailsSection.AddView(WrapControlWithHelp(ismOrderSelector, S["IsmOrderTitle"].TrimEnd(':'), S["TipIsmOrder"], bottomMarginDp: 6));
+        ismDetailsSection.AddView(WrapControlWithHelp(ismOrderSelector, S["IsmOrderTitle"].TrimEnd(':'), S["TipIsmOrder"], bottomMarginDp: 6));
 
         (ismLevelBar, _) = AddSliderRow(
             externalizationDetailsSection,
@@ -114,6 +120,7 @@ public partial class MainActivity {
             "%",
             defaultValue: 100);
 
+        externalizationDetailsSection.AddView(ismDetailsSection);
         AddDivider(externalizationDetailsSection);
         nearFieldEnabledSwitch = AddSwitchRow(externalizationDetailsSection, S["NearFieldEnableTitle"], store.NearFieldCompensationEnabled, v => {
             if (IsCoordinatorUpdating) return;
@@ -128,8 +135,9 @@ public partial class MainActivity {
             ApplyAndRefreshExternalization();
         }, helpBody: S["TipAirAbsorption"]);
 
+        airAbsDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         (airTempBar, _) = AddSliderRow(
-            externalizationDetailsSection,
+            airAbsDetailsSection,
             S["AirTempTitle"],
             0,
             40,
@@ -143,7 +151,7 @@ public partial class MainActivity {
             defaultValue: 20);
 
         (airHumidityBar, _) = AddSliderRow(
-            externalizationDetailsSection,
+            airAbsDetailsSection,
             S["AirHumidityTitle"],
             15,
             90,
@@ -156,6 +164,7 @@ public partial class MainActivity {
             "%",
             defaultValue: 50);
 
+        externalizationDetailsSection.AddView(airAbsDetailsSection);
         slot5aCard.AddView(externalizationDetailsSection);
         RegisterSettingsCard(slot5aCard, categoryIndex: 1, isProOnly: true, "physical externalization ism room reflections near field dvf air absorption temperature humidity");
 
@@ -198,10 +207,11 @@ public partial class MainActivity {
         biometricItdSwitch = AddSwitchRow(slot5bCard, S["BiometricItdEnableTitle"], store.BiometricItdEnabled, v => {
             store.BiometricItdEnabled = v;
             ApplyAndRefreshPersonalization(rebuildHrir: true);
+        biometricItdDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         }, helpBody: S["TipBiometricItd"]);
 
         (headWidthBar, _) = AddSliderRow(
-            slot5bCard,
+            biometricItdDetailsSection,
             S["HeadWidthTitle"],
             130,
             180,
@@ -222,7 +232,7 @@ public partial class MainActivity {
         }
 
         (manualItdBar, _) = AddSliderRow(
-            slot5bCard,
+            biometricItdDetailsSection,
             S["ManualItdOffsetTitle"],
             -120,
             120,
@@ -238,14 +248,16 @@ public partial class MainActivity {
             " µs",
             defaultValue: 0);
 
+                slot5bCard.AddView(biometricItdDetailsSection);
         AddDivider(slot5bCard);
         hptfNotchSwitch = AddSwitchRow(slot5bCard, S["HptfNotchEnableTitle"], store.HptfNotchEnabled, v => {
             store.HptfNotchEnabled = v;
             ApplyAndRefreshPersonalization(rebuildHrir: false);
+        hptfNotchDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         }, helpBody: S["TipHptfNotch"]);
 
         (hptfFreqBar, _) = AddSliderRow(
-            slot5bCard,
+            hptfNotchDetailsSection,
             S["HptfFreqTitle"],
             6000,
             10000,
@@ -258,7 +270,7 @@ public partial class MainActivity {
             defaultValue: 8000);
 
         (hptfGainBar, _) = AddSliderRow(
-            slot5bCard,
+            hptfNotchDetailsSection,
             S["HptfGainTitle"],
             -12,
             0,
@@ -271,7 +283,7 @@ public partial class MainActivity {
             defaultValue: -4);
 
         (hptfQBar, _) = AddSliderRow(
-            slot5bCard,
+            hptfNotchDetailsSection,
             S["HptfQTitle"],
             3,
             16,
@@ -289,7 +301,7 @@ public partial class MainActivity {
         Button toneBtn = PillButton(S["HptfToneTestBtn"], () => PlayHptfTestToneAsync(sweep: false));
         slot5bRow1.AddView(wizardBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.25f) { RightMargin = Dp(8) });
         slot5bRow1.AddView(toneBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        slot5bCard.AddView(slot5bRow1, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        hptfNotchDetailsSection.AddView(slot5bRow1, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         LinearLayout slot5bRow2 = HRow();
         slot5bRow2.SetPadding(0, Dp(8), 0, 0);
@@ -297,8 +309,9 @@ public partial class MainActivity {
         Button import5bBtn = PillButton(S["Slot5BImportBtn"], LaunchCustomHrirImporter);
         slot5bRow2.AddView(sweepBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         slot5bRow2.AddView(import5bBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f));
-        slot5bCard.AddView(slot5bRow2, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        hptfNotchDetailsSection.AddView(slot5bRow2, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
+                slot5bCard.AddView(hptfNotchDetailsSection);
         RegisterSettingsCard(slot5bCard, categoryIndex: 1, isProOnly: true, "hrtf personalization magls ambisonics biometric itd head width hptf notch wizard");
 
         // Wave F (W53.6 / B13): Physical Transaural XTC Spatializer (Phone & External Stereo Speakers, Bit-Exact Headphone Bypass)
@@ -318,6 +331,7 @@ public partial class MainActivity {
             BottomMargin = Dp(8)
         });
 
+        xtcDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         transauralPresetSelector = new OneUiInlineSelector(this, S["TransauralPresetTitle"]);
         string[] xtcPresetLabels = [
             S["TransauralPresetPhoneLand"],
@@ -331,10 +345,10 @@ public partial class MainActivity {
             store.TransauralXtcPresetIndex = pos;
             ApplyAndRefreshTransauralXtc();
         };
-        xtcCard.AddView(WrapControlWithHelp(transauralPresetSelector, S["TransauralPresetTitle"].TrimEnd(':'), S["TipTransauralPreset"], bottomMarginDp: 6));
+        xtcDetailsSection.AddView(WrapControlWithHelp(transauralPresetSelector, S["TransauralPresetTitle"].TrimEnd(':'), S["TipTransauralPreset"], bottomMarginDp: 6));
 
         (transauralStrengthBar, _) = AddSliderRow(
-            xtcCard,
+            xtcDetailsSection,
             S["TransauralStrengthTitle"],
             20,
             100,
@@ -347,13 +361,14 @@ public partial class MainActivity {
             "%",
             defaultValue: 85);
 
-        AddDivider(xtcCard);
-        transauralHeadphoneBypassSwitch = AddSwitchRow(xtcCard, S["TransauralAutoBypassTitle"], store.TransauralXtcAutoBypassHeadphones, v => {
+        AddDivider(xtcDetailsSection);
+        transauralHeadphoneBypassSwitch = AddSwitchRow(xtcDetailsSection, S["TransauralAutoBypassTitle"], store.TransauralXtcAutoBypassHeadphones, v => {
             if (IsCoordinatorUpdating) return;
             store.TransauralXtcAutoBypassHeadphones = v;
             ApplyAndRefreshTransauralXtc();
         }, helpBody: S["TipTransauralAutoBypass"]);
 
+        xtcCard.AddView(xtcDetailsSection);
         RegisterSettingsCard(xtcCard, categoryIndex: 1, isProOnly: false, "transaural xtc crosstalk cancellation speaker spatializer bacch phone stereo speakers headphone bypass");
     }
 
@@ -373,6 +388,9 @@ public partial class MainActivity {
     }
 
     void RefreshTransauralXtcUi() {
+        if (xtcDetailsSection != null && store != null) {
+            xtcDetailsSection.Visibility = store.TransauralXtcEnabled ? ViewStates.Visible : ViewStates.Gone;
+        }
         if (uiDestroyed || store == null) {
             return;
         }
@@ -432,6 +450,12 @@ public partial class MainActivity {
         bool speakerBypass = ShouldAutoBypassRoomAmbienceForSpeakers();
         if (externalizationDetailsSection != null) {
             externalizationDetailsSection.Visibility = speakerBypass ? ViewStates.Gone : ViewStates.Visible;
+        }
+        if (ismDetailsSection != null) {
+            ismDetailsSection.Visibility = store.IsmRoomEnabled ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (airAbsDetailsSection != null) {
+            airAbsDetailsSection.Visibility = store.AirAbsorptionEnabled ? ViewStates.Visible : ViewStates.Gone;
         }
         if (ismRoomEnabledSwitch != null && ismRoomEnabledSwitch.Checked != store.IsmRoomEnabled) {
             ismRoomEnabledSwitch.Checked = store.IsmRoomEnabled;
@@ -561,6 +585,12 @@ public partial class MainActivity {
     }
 
     void RefreshPersonalizationUi() {
+        if (biometricItdDetailsSection != null && store != null) {
+            biometricItdDetailsSection.Visibility = store.BiometricItdEnabled ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (hptfNotchDetailsSection != null && store != null) {
+            hptfNotchDetailsSection.Visibility = store.HptfNotchEnabled ? ViewStates.Visible : ViewStates.Gone;
+        }
         if (uiDestroyed || store == null) {
             return;
         }

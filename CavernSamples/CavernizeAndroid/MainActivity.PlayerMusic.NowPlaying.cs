@@ -18,172 +18,19 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
-    ValueAnimator playLibStripAnimator;
-
     void SetMusicPlayerSection(bool openLibrary) {
-        bool wasOpen = isLibrarySectionOpen;
-        isLibrarySectionOpen = openLibrary;
-        if (openLibrary && isFormatPillExpanded) {
-            SetFormatPillExpanded(false, animate: false);
-        }
-        if (!openLibrary && librarySearchInput != null) {
-            try {
-                librarySearchInput.ClearFocus();
-                if (GetSystemService(InputMethodService) is Android.Views.InputMethods.InputMethodManager imm) {
-                    imm.HideSoftInputFromWindow(librarySearchInput.WindowToken, Android.Views.InputMethods.HideSoftInputFlags.None);
-                }
-            } catch {
-                // Best effort keyboard dismissal
-            }
-        }
-        ApplyCurrentWindowInsetsPadding();
-        UpdateSectionSwitcherStyle();
-        SyncPredictiveBackRegistration();
-
-        // Show full bottom nav bar when browsing Library; hide it on Now Playing (integrated '+' pill handles navigation)
-        if (activeTab == 0) {
-            SetBottomNavBarVisible(openLibrary, animate: true);
-        }
-
-        if (musicNowPlayingScrollView != null && musicLibraryScrollView != null) {
-            playLibStripAnimator?.Cancel();
-            playLibStripAnimator = null;
-            View entering = openLibrary ? (View)musicLibraryScrollView : musicNowPlayingScrollView;
-            View leaving = openLibrary ? (View)musicNowPlayingScrollView : musicLibraryScrollView;
-            entering.Animate()?.Cancel();
-            leaving.Animate()?.Cancel();
-            OneUiMotionBlur.ClearMotionBlur(entering);
-            OneUiMotionBlur.ClearMotionBlur(leaving);
-
-            float viewportW = entering.Parent is View pv && pv.Width > 0
-                ? pv.Width
-                : (Resources?.DisplayMetrics?.WidthPixels ?? 1080);
-            if (wasOpen == openLibrary || viewportW <= 1f) {
-                leaving.Visibility = ViewStates.Gone;
-                leaving.TranslationX = 0f;
-                leaving.ScaleX = 1f;
-                leaving.ScaleY = 1f;
-                leaving.Alpha = 1f;
-                entering.Visibility = ViewStates.Visible;
-                entering.TranslationX = 0f;
-                entering.ScaleX = 1f;
-                entering.ScaleY = 1f;
-                entering.Alpha = 1f;
-                if (!openLibrary) {
-                    musicTabRootPage?.Post(() => UpdatePlayTabSpacingForViewport(force: true));
-                }
-            } else {
-                float dir = openLibrary ? 1f : -1f;
-                if (navFrostedHost != null) {
-                    navFrostedHost.IsSuspendedForTransition = true;
-                }
-                OneUiMotionBlur.EnableHardwareLayer(entering);
-                OneUiMotionBlur.EnableHardwareLayer(leaving);
-                entering.Visibility = ViewStates.Visible;
-                entering.Alpha = 0.92f;
-                entering.ScaleX = 0.988f;
-                entering.ScaleY = 0.988f;
-                entering.TranslationX = dir * viewportW;
-                leaving.Visibility = ViewStates.Visible;
-                leaving.Alpha = 1f;
-                leaving.ScaleX = 1f;
-                leaving.ScaleY = 1f;
-                leaving.TranslationX = 0f;
-
-                ValueAnimator anim = ValueAnimator.OfFloat(0f, 1f);
-                anim.SetDuration(260);
-                anim.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
-                anim.Update += (_, e) => {
-                    if (uiDestroyed) return;
-                    float t = (float)(e.Animation?.AnimatedValue ?? 1f);
-                    float arch = 4f * t * (1f - t); // Smooth 0 -> 1 -> 0 breathing curve
-                    entering.TranslationX = dir * (1f - t) * viewportW;
-                    leaving.TranslationX = -dir * t * viewportW;
-                    entering.ScaleX = 1f - 0.012f * (1f - t);
-                    entering.ScaleY = entering.ScaleX;
-                    entering.Alpha = 0.92f + 0.08f * t;
-                    leaving.ScaleX = 1f - 0.014f * arch;
-                    leaving.ScaleY = leaving.ScaleX;
-                    leaving.Alpha = 1f - 0.14f * t;
-                };
-                void Done() {
-                    OneUiMotionBlur.ClearHardwareLayer(entering);
-                    OneUiMotionBlur.ClearHardwareLayer(leaving);
-                    entering.TranslationX = 0f;
-                    entering.ScaleX = 1f;
-                    entering.ScaleY = 1f;
-                    entering.Alpha = 1f;
-                    entering.Visibility = ViewStates.Visible;
-                    leaving.TranslationX = 0f;
-                    leaving.ScaleX = 1f;
-                    leaving.ScaleY = 1f;
-                    leaving.Alpha = 1f;
-                    leaving.Visibility = ViewStates.Gone;
-                    playLibStripAnimator = null;
-                    if (navFrostedHost != null) {
-                        navFrostedHost.IsSuspendedForTransition = false;
-                        navFrostedHost.ScheduleDeferredBlur(140);
-                    }
-                    if (!openLibrary) {
-                        musicTabRootPage?.Post(() => UpdatePlayTabSpacingForViewport(force: true));
-                    }
-                }
-                anim.AnimationEnd += (_, _) => Done();
-                anim.AnimationCancel += (_, _) => {
-                    OneUiMotionBlur.ClearHardwareLayer(entering);
-                    OneUiMotionBlur.ClearHardwareLayer(leaving);
-                    entering.TranslationX = 0f;
-                    entering.ScaleX = 1f;
-                    entering.ScaleY = 1f;
-                    entering.Alpha = 1f;
-                    leaving.TranslationX = 0f;
-                    leaving.ScaleX = 1f;
-                    leaving.ScaleY = 1f;
-                    leaving.Alpha = 1f;
-                    if (musicNowPlayingScrollView != null) {
-                        musicNowPlayingScrollView.Visibility = isLibrarySectionOpen ? ViewStates.Gone : ViewStates.Visible;
-                    }
-                    if (musicLibraryScrollView != null) {
-                        musicLibraryScrollView.Visibility = isLibrarySectionOpen ? ViewStates.Visible : ViewStates.Gone;
-                    }
-                    if (playLibStripAnimator == anim) {
-                        playLibStripAnimator = null;
-                    }
-                    if (navFrostedHost != null) {
-                        navFrostedHost.IsSuspendedForTransition = false;
-                    }
-                };
-                playLibStripAnimator = anim;
-                anim.Start();
-            }
-        }
-
         if (openLibrary) {
-            musicVideoStage?.PauseVideoDecoderOnly();
-            if (librarySnapshot == null || IsLibraryBaseIndexStale()) {
-                ScheduleLibraryLoadAndRenderAsync(loadCacheFromDisk: librarySnapshot == null);
-            } else {
-                RenderLibraryView();
+            CloseNowPlayingSheet();
+            if (activeTab != 0) {
+                SwitchTab(0);
             }
-            if (!isLibraryScanning) {
-                RefreshLibraryScanAsync(force: false);
-            }
-        } else if (musicStageMode == PlayerStageMode.Video && activeTab == 0) {
-            musicVideoStage?.SyncPlaybackState(playerEngine?.IsPlaying == true, playerEngine?.CurrentSeconds ?? 0, playerEngine?.TotalSeconds ?? 0);
+            RefreshLibraryScanAsync(force: false);
+        } else {
+            OpenNowPlayingSheet(subViewIndex: 0);
         }
     }
 
-    void UpdateSectionSwitcherStyle() {
-        if (segNowPlayingBtn == null || segLibraryBtn == null) return;
-        void Style(TextView tv, bool selected) {
-            tv.Background = selected
-                ? OneUiTheme.CreateRoundedDrawable(this, Color.Argb(228, 252, 252, 255), 999f)
-                : null;
-            tv.SetTextColor(selected ? Color.Rgb(18, 20, 26) : Color.Argb(210, 240, 242, 248));
-        }
-        Style(segNowPlayingBtn, !isLibrarySectionOpen);
-        Style(segLibraryBtn, isLibrarySectionOpen);
-    }
+    void UpdateSectionSwitcherStyle() => UpdateNowPlayingSubViewPillsUi();
 
     void SetPlayerStageMode(PlayerStageMode mode, bool animate = true) {
         if (currentMediaMeta?.HasVideo == true) {
@@ -193,6 +40,10 @@ public partial class MainActivity {
         }
         PlayerStageMode prevMode = musicStageMode;
         musicStageMode = mode;
+        if (isNowPlayingSheetOpen && activeNowPlayingSubView != 2) {
+            activeNowPlayingSubView = mode == PlayerStageMode.Lyrics ? 1 : 0;
+            UpdateNowPlayingSubViewPillsUi();
+        }
         SyncPredictiveBackRegistration();
 
         if (mode == PlayerStageMode.Lyrics && isFormatPillExpanded) {
@@ -212,7 +63,7 @@ public partial class MainActivity {
 
         if (musicVideoSlot != null) {
             musicVideoSlot.Visibility = mode == PlayerStageMode.Video ? ViewStates.Visible : ViewStates.Gone;
-            if (mode == PlayerStageMode.Video && activeTab == 0 && !isLibrarySectionOpen) {
+            if (mode == PlayerStageMode.Video && isNowPlayingSheetOpen) {
                 musicVideoStage?.SyncPlaybackState(playerEngine?.IsPlaying == true, playerEngine?.CurrentSeconds ?? 0, playerEngine?.TotalSeconds ?? 0);
             } else {
                 musicVideoStage?.PauseVideoDecoderOnly();
@@ -461,6 +312,7 @@ public partial class MainActivity {
             }
         }
         if (musicLyricsScarlettBtn != null) {
+            musicLyricsScarlettBtn.Visibility = hasUsb ? ViewStates.Visible : ViewStates.Gone;
             musicLyricsScarlettBtn.Background = hasUsb
                 ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 175), 1f)
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
@@ -694,6 +546,7 @@ public partial class MainActivity {
 
         RefreshActiveTrackFormatSwitcher(triggerDeepAnalysis: true);
         RefreshLyricsSingDockUi();
+        RefreshMiniPlayerUi();
         RefreshMusicPlayerControlsUi();
     }
 

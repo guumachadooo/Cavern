@@ -33,7 +33,7 @@ public sealed class LiveBridgeAuthActivity : Activity {
     LiveBridgeKnockRequest activeKnock;
     CancellationSignal biometricCancel;
     TextView statusLabel;
-    CheckBox rememberWorkspaceCheck;
+    OneUiSwitch rememberWorkspaceCheck;
     Button approveBtn;
     Button denyBtn;
     bool resolved;
@@ -126,7 +126,7 @@ public sealed class LiveBridgeAuthActivity : Activity {
         card.AddView(details);
 
         if (IsKnockMode) {
-            rememberWorkspaceCheck = new CheckBox(this) {
+            rememberWorkspaceCheck = new OneUiSwitch(this) {
                 Text = S["LiveBridgeKnockRememberCheck"],
                 Checked = string.Equals(activeKnock.RequestedScope, "workspace", StringComparison.OrdinalIgnoreCase),
                 TextSize = 12.5f

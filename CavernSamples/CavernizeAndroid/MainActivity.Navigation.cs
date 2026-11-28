@@ -431,32 +431,27 @@ public partial class MainActivity {
             svCur.ScaleY = 1f;
             svCur.TranslationX = 0f;
         }
-        UpdateTabButtonStyles(animate: true);
-        bool crossingPlayBoundary = prevTab != idx && ((prevTab == 0) != (idx == 0));
-        if (idx == 0 && fileDetailsExpanded) {
-            fileDetailsExpanded = false;
-            UpdateInlineTrackListVisibility();
+        if (isNowPlayingSheetOpen) {
+            CloseNowPlayingSheet();
         }
-        UpdateWorkspaceChromeVisibility(idx != 0, animate: crossingPlayBoundary);
-        bool wantsNav = idx != 0 || isLibrarySectionOpen;
-        SetBottomNavBarVisible(wantsNav, animate: prevTab != idx || isBottomNavVisible != wantsNav);
-        if (idx == 1) {
-            UpdateRoomCanvas();
-            RefreshSpatialChoreoClarifierUi();
-        } else if (idx == 0) {
+        UpdateTabButtonStyles(animate: true);
+        UpdateTopShellHeaderTitle();
+        SetBottomNavBarVisible(!isNowPlayingSheetOpen, animate: false);
+        if (idx == 0) {
             RefreshMusicPlayerUi();
-            if (!isLibrarySectionOpen) {
-                musicTabRootPage?.Post(() => UpdatePlayTabSpacingForViewport(force: true));
-            }
-        } else if (idx == 4) {
-            if (prevTab == 4) {
+        } else if (idx == 1) {
+            if (prevTab == 1) {
                 OpenSettingsCategory(-1);
             } else {
                 RefreshSettingsCategorySubtitles();
             }
+            RefreshSoundHubCardsUi();
+        } else if (idx == 2) {
+            SyncUnifiedExportQueueUi();
         }
         if (tabStripAnimator == null) {
             navFrostedHost?.ScheduleDeferredBlur(160);
+            miniPlayerBarHost?.ScheduleDeferredBlur(160);
         }
         SyncPredictiveBackRegistration();
     }
@@ -526,6 +521,10 @@ public partial class MainActivity {
         if (visible && imeOpen) {
             navFrostedHost.Animate()?.Cancel();
             navFrostedHost.Visibility = ViewStates.Gone;
+            if (miniPlayerBarHost != null) {
+                miniPlayerBarHost.Animate()?.Cancel();
+                miniPlayerBarHost.Visibility = ViewStates.Gone;
+            }
             if (bottomScrimView != null) {
                 bottomScrimView.Animate()?.Cancel();
                 bottomScrimView.Visibility = ViewStates.Gone;
@@ -542,6 +541,13 @@ public partial class MainActivity {
             navFrostedHost.TranslationY = visible ? 0f : Dp(34);
             navFrostedHost.ScaleX = visible ? 1f : 0.94f;
             navFrostedHost.ScaleY = visible ? 1f : 0.94f;
+            if (miniPlayerBarHost != null) {
+                bool showMini = visible && !isNowPlayingSheetOpen;
+                miniPlayerBarHost.Animate()?.Cancel();
+                miniPlayerBarHost.Visibility = showMini ? ViewStates.Visible : ViewStates.Gone;
+                miniPlayerBarHost.Alpha = showMini ? 1f : 0f;
+                miniPlayerBarHost.TranslationY = showMini ? 0f : Dp(24);
+            }
             if (bottomScrimView != null) {
                 bottomScrimView.Visibility = visible ? ViewStates.Visible : ViewStates.Gone;
                 bottomScrimView.Alpha = visible ? 1f : 0f;
@@ -576,6 +582,16 @@ public partial class MainActivity {
                     navFrostedHost?.ScheduleDeferredBlur(140);
                 }))
                 .Start();
+            if (miniPlayerBarHost != null && !isNowPlayingSheetOpen) {
+                miniPlayerBarHost.Visibility = ViewStates.Visible;
+                miniPlayerBarHost.Animate()?.Cancel();
+                miniPlayerBarHost.Animate()
+                    .Alpha(1f)
+                    .TranslationY(0f)
+                    .SetDuration(240)
+                    .SetInterpolator(CreateOneUiEase())
+                    .Start();
+            }
             if (bottomScrimView != null) {
                 bottomScrimView.Visibility = ViewStates.Visible;
                 bottomScrimView.Animate()
@@ -597,6 +613,18 @@ public partial class MainActivity {
                     navFrostedHost.Visibility = ViewStates.Gone;
                 }))
                 .Start();
+            if (miniPlayerBarHost != null) {
+                miniPlayerBarHost.Animate()?.Cancel();
+                miniPlayerBarHost.Animate()
+                    .Alpha(0f)
+                    .TranslationY(Dp(24))
+                    .SetDuration(200)
+                    .WithEndAction(new Java.Lang.Runnable(() => {
+                        if (uiDestroyed || myGen != navVisAnimGen) return;
+                        miniPlayerBarHost.Visibility = ViewStates.Gone;
+                    }))
+                    .Start();
+            }
             if (bottomScrimView != null) {
                 bottomScrimView.Animate()
                     .Alpha(0f)
@@ -631,9 +659,7 @@ public partial class MainActivity {
         if (tabIndicatorPill == null || tabCells == null || activeTab < 0 || activeTab >= tabCells.Length) {
             return;
         }
-        View targetHost = activeTab == 4 && tabCells[4].Parent is View parentCell
-            ? parentCell
-            : tabCells[activeTab];
+        View targetHost = tabCells[activeTab];
         int targetW = targetHost.Width;
         int targetH = targetHost.Height;
         if (targetW <= 0 || targetH <= 0) {
@@ -865,6 +891,7 @@ public partial class MainActivity {
         readonly Func<int> getTabCount;
         readonly Func<int, View> getContainerAt;
         readonly Action<int, float> switchTabFromDrag;
+        readonly Func<bool> canSwipeTabs;
         readonly float touchSlop;
         readonly float commitDistPx;
         readonly float flingVelPxPerSec;
@@ -885,11 +912,13 @@ public partial class MainActivity {
             Func<int> getActiveTab,
             Func<int> getTabCount,
             Func<int, View> getContainerAt,
-            Action<int, float> switchTabFromDrag) : base(ctx) {
+            Action<int, float> switchTabFromDrag,
+            Func<bool> canSwipeTabs = null) : base(ctx) {
             this.getActiveTab = getActiveTab;
             this.getTabCount = getTabCount;
             this.getContainerAt = getContainerAt;
             this.switchTabFromDrag = switchTabFromDrag;
+            this.canSwipeTabs = canSwipeTabs;
             density = ctx.Resources?.DisplayMetrics?.Density ?? 3f;
             touchSlop = ViewConfiguration.Get(ctx)?.ScaledTouchSlop ?? (int)(8f * density);
             commitDistPx = 64f * density;
@@ -901,8 +930,7 @@ public partial class MainActivity {
                 return false;
             }
             int curTab = getActiveTab();
-            // Never allow horizontal swipe away from Play (tab 0)
-            if (curTab <= 0) {
+            if (canSwipeTabs != null && !canSwipeTabs()) {
                 isSwiping = false;
                 ignoreGesture = true;
                 return false;
