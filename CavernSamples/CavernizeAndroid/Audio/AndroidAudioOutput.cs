@@ -402,6 +402,7 @@ public sealed partial class AndroidAudioOutput : IDisposable {
             nativeFallbackLatched = false;
             nativeRetryRequested = true;
             nativeStallTicks = 0;
+            Diagnostics = Diagnostics with { UnderrunCount = 0 };
             running = true;
             renderThread = new Thread(AudioLoop) {
                 Name = "CavernizeAudioOut",
@@ -462,6 +463,7 @@ public sealed partial class AndroidAudioOutput : IDisposable {
             wasPathB = StopNativeBackendLocked();
             mgr = usbManager;
             ReleaseTrack();
+            Diagnostics = Diagnostics with { UnderrunCount = 0 };
         }
         if (wasPathB) {
             mgr?.NotifyPathBFileDescriptorState(ownedByPathB: false);

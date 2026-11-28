@@ -95,7 +95,8 @@ public partial class MainActivity {
             targetName.StartsWith("SettingsCat", StringComparison.Ordinal) ||
             targetName is "Modal:BinauralProfileSelector" or "Modal:PerceptualHrtfWizard" or "Modal:NeuralModels"
                 or "Modal:AutoVocalMixMatch" or "Modal:Scarlett2i2Controls" or "Modal:StudioBatch"
-                or "Modal:OnlineMetadata" or "Modal:TrackSelector" or "Modal:SmartCleanInspector") {
+                or "Modal:OnlineMetadata" or "Modal:TrackSelector" or "Modal:SmartCleanInspector"
+                or "Modal:LiveBridgeConfig") {
             return ("Medium", 180, 420);
         }
         return ("Simple", 90, 240);

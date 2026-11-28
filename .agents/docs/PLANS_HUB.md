@@ -48,7 +48,7 @@
 
 ## 4. Live Machine-Synced Inventory
 <!-- HUB:AUTO_START -->
-HUB_STATS|blueprints=8 (done=2, partial=5, active=0, deferred=1, superseded=0)|archived_done=12|min_score=100/100|open_conflicts=0|monoliths_gt2000=0
+HUB_STATS|blueprints=9 (done=2, partial=6, active=0, deferred=1, superseded=0)|archived_done=12|min_score=100/100|open_conflicts=0|monoliths_gt2000=0
 
 | Blueprint ID | Status | Score | Tier | H2+ Stubs | Hygiene / Lineage Note |
 | :--- | :---: | :---: | :---: | :---: | :--- |
@@ -57,6 +57,7 @@ HUB_STATS|blueprints=8 (done=2, partial=5, active=0, deferred=1, superseded=0)|a
 | `BP_LEGACY_CAVERN_CORE_AND_SUITE_PARITY` | `DONE` | `100/100` | `T3` | `1` | ALL H1 slices (W57.1-W57.4) DONE & QA PASS (CRIT=0/HIGH=0); Track B S25U Scarlett sweep QA next |
 | `BP_OMNISCIENT_SPATIAL_OBJECT_CORTEX` | `DEFERRED` | `100/100` | `T3` | `2` | resolved=Phase-A W1-W3 shipped in T6; Phase-B W4 local INT4 LLM deferred & MUST execute in isolated :worker p |
 | `BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA` | `PARTIAL` | `100/100` | `T2` | `1` | W1 native/C# code DONE (v2.9.80); W2-LiveReverify physical Scarlett 2i2 Gen4 S25U test pending. |
+| `BP_TRACKB_LIVE_QA_REMEDIATION` | `PARTIAL` | `100/100` | `T2` | `0` | Code + CI parity verified for v2.9.104; awaiting live S25U Track B V1-V12 sign-off |
 | `BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP` | `PARTIAL` | `100/100` | `T3` | `1` | ALL H1 slices (`W53.0`, `W53.Q1–Q4`, `W53.1`, `W53.1b`, `W53.2`, `W53.3`, `W53.4`, `W53.5`, `W53.6`) DONE & CI |
 | `BP_V4_REFORM_SPATIAL_AI_ONEUI9` | `DONE` | `100/100` | `T3` | `1` | ALL H1 slices (W55.1-W55.6) + v2.9.102 B1-B7 DONE & QA PASS (CRIT=0/HIGH=0); Track B S25U HW QA next |
 | `BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS` | `PARTIAL` | `100/100` | `T3` | `1` | W51.1-W51.7 code DONE (v2.9.81) + ONNX low-RAM fixes (v2.9.82); W52 live S25U verification pending. |

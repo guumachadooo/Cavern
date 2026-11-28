@@ -1047,6 +1047,96 @@
           "message": "SelfAudit L9 modals[] must include PresetsAndPortability and QuickEqCalibration"
         }
       ]
+    },
+    {
+      "id": "REG-V4-012-STEM-HEAP-DEDUP-AND-LOH-COMPACT",
+      "bug_ref": "TrackB-BUG-TB1",
+      "title": "Prevent duplicate .ntc stem loading across Spatial/Karaoke slots and compact LOH after heavy W8A16 quantization and track swaps",
+      "domain": "ai-ml",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T60 + PY_T20",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/Adapters/NeuralStemStageProcessor.cs",
+          "pattern": "AreEquivalentTracks\\([\\s\\S]*?activeKaraokeTrack\\s*=\\s*null",
+          "message": "NeuralStemStageProcessor must deduplicate equivalent activeKaraokeTrack against activeSpatialUpmixTrack"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/OnnxMobileQuantizer.cs",
+          "pattern": "LargeObjectHeapCompactionMode[\\s\\S]*?GC\\.Collect\\(2,\\s*GCCollectionMode\\.Forced",
+          "message": "OnnxMobileQuantizer must compact LOH immediately after writing heavy W8A16 cache"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.NeuralWorkflows.cs",
+          "pattern": "neuralAutoBindCts[\\s\\S]*?loadedSpatialKey",
+          "message": "TryAutoBindCachedNeuralStemsAsync must cancel overlapping loads and skip duplicate CacheKey reads"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-013-OFF-UI-DISK-AND-LIBRARY-TAB-FASTPATH",
+      "bug_ref": "TrackB-BUG-TB2-TB3",
+      "title": "Keep File.Exists off main UI thread and fast-path Library tab switch via MiniPlayer refresh",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:PY_T20",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.LiveBridge.cs",
+          "pattern": "await\\s+Task\\.Run\\(\\(\\)\\s*=>\\s*File\\.Exists\\(path\\)\\)",
+          "message": "OpenFileAsync must check File.Exists off UI thread to prevent StrictMode DiskReadViolation"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.Navigation.cs",
+          "pattern": "isNowPlayingSheetOpen[\\s\\S]*?RefreshMiniPlayerUi\\(\\)",
+          "message": "SwitchTabInternal(0) must use lightweight RefreshMiniPlayerUi when Now Playing sheet is closed"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-014-3TAB-PARITY-FONT130-AND-UNDERRUN-RESET",
+      "bug_ref": "TrackB-BUG-TB4-TB5-TB6",
+      "title": "Maintain 3-tab Bridge/BugHunter parity, >=12.5f Mode: Pro + 2-line title reflow, and clean idle AudioTrack underrun reporting",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:PY_T20 + test_bug_hunter.py",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/LiveDiagnosticBridgeService.cs",
+          "pattern": "CanonicalTabNames\\s*=\\s*\\[\"library\",\\s*\"sound\",\\s*\"export\"\\]",
+          "message": "LiveDiagnosticBridgeService.CanonicalTabNames must stay aligned to 3-tab V4 shell"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.Settings.Core.cs",
+          "pattern": "settingsModeToggleBtn\\.TextSize\\s*=\\s*12\\.5f",
+          "message": "settingsModeToggleBtn.TextSize must remain >=12.5f for font_130 readability"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Audio/AndroidAudioOutput.TransportAndTelemetry.cs",
+          "pattern": "!running\\s*\\|\\|\\s*\\(!engine\\.IsPlaying",
+          "message": "LastAudioTrackUnderrunCount must return 0 when stream is stopped/idle"
+        }
+      ]
     }
   ]
 }

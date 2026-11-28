@@ -5061,6 +5061,65 @@ RunTest("T59_W57_4_QuickEq_FarinaEss_FdwErb_MultiPoint_And_HighFreqBoostGuard", 
     Assert(!string.IsNullOrWhiteSpace(qeCamilla) && qeCamilla.Contains("filters:"), "QuickEQ CamillaDSP YAML export invalid");
 });
 
+// =========================================================================
+// TEST 60 (BUG-TB1..TB6): Track B S25U Live QA Remediation Contracts
+// =========================================================================
+RunTest("T60_TrackB_StemHeapDedup_PreventsDuplicateKaraokeLohRetention", () => {
+    NeuralStemStageProcessor stage = new();
+    var stem = new StereoStemBuffer("vocals", new float[256], new float[256]);
+    var trackA = new NeuralSeparatedTrack {
+        SourceTrackKey = "/tmp/track.flac",
+        SampleRate = 48000,
+        Stems = [stem],
+        OriginTag = "MVSEP Cloud",
+        ModelSummary = "6-Stem",
+        DerivedFromLosslessTwin = false,
+        MonoLeadVocalRef = new float[256]
+    };
+    var trackB = new NeuralSeparatedTrack {
+        SourceTrackKey = "/tmp/track.flac",
+        SampleRate = 48000,
+        Stems = [new StereoStemBuffer("vocals", new float[256], new float[256])],
+        OriginTag = "MVSEP Cloud",
+        ModelSummary = "6-Stem",
+        DerivedFromLosslessTwin = false,
+        MonoLeadVocalRef = new float[256]
+    };
+
+    stage.BindSpatialUpmixTrack(trackA);
+    stage.BindKaraokeReferenceTrack(trackB);
+    Assert(ReferenceEquals(stage.ActiveSpatialUpmixTrack, trackA), "ActiveSpatialUpmixTrack must remain bound");
+    Assert(stage.ActiveKaraokeTrack == null,
+        "BUG-TB1: BindKaraokeReferenceTrack must drop equivalent duplicate track to prevent 791MB LOH duplication");
+    Assert(ReferenceEquals(stage.ActiveSeparatedTrack, trackA),
+        "ActiveSeparatedTrack must resolve cleanly to ActiveSpatialUpmixTrack");
+
+    // Reversing bind order must also drop duplicate when SpatialUpmixTrack binds second
+    stage.ClearAllSeparatedTracks();
+    stage.BindKaraokeReferenceTrack(trackB);
+    stage.BindSpatialUpmixTrack(trackA);
+    Assert(ReferenceEquals(stage.ActiveSpatialUpmixTrack, trackA), "ActiveSpatialUpmixTrack must bind cleanly");
+    Assert(stage.ActiveKaraokeTrack == null,
+        "BUG-TB1: BindSpatialUpmixTrack must clear equivalent duplicate ActiveKaraokeTrack");
+
+    // Distinct 2-stem Lead/Backing track must stay independently bound
+    var distinctKaraoke = new NeuralSeparatedTrack {
+        SourceTrackKey = "/tmp/track.flac",
+        SampleRate = 48000,
+        Stems = [
+            new StereoStemBuffer("lead_vocal", new float[256], new float[256]),
+            new StereoStemBuffer("backing_vocals", new float[256], new float[256])
+        ],
+        OriginTag = "MVSEP Cascade",
+        ModelSummary = "Lead/Back Vocals-Only",
+        DerivedFromLosslessTwin = false,
+        MonoLeadVocalRef = new float[256]
+    };
+    stage.BindKaraokeReferenceTrack(distinctKaraoke);
+    Assert(ReferenceEquals(stage.ActiveKaraokeTrack, distinctKaraoke),
+        "Distinct karaoke-only stem track must remain bound alongside spatial stems");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -6773,6 +6832,52 @@ def _py_stage19_v29102_bugs_and_epoch5_contracts() -> None:
     assert qe_ui.index("quickEqService.TakeCount > 0") < qe_ui.index("LoadSavedBands(store)"), "QA: ShowQuickEqExportDialog must prefer unsaved session takes"
 
 
+def _py_stage20_trackb_live_qa_remediation_contracts() -> None:
+    """BUG-TB1..TB6: Verify stem dedup + LOH compaction, off-UI DiskRead fixes, Tab0 fast-path, 3-tab parity, 12.5f reflow, and underrun reset."""
+    # BUG-TB1: OnnxMobileQuantizer + NativeOnnxRuntimeBridge LOH compaction & NeuralWorkflows single-load dedup
+    quant_cs = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "OnnxMobileQuantizer.cs").read_text(encoding="utf-8")
+    assert "LargeObjectHeapCompactionMode" in quant_cs and "GC.Collect(2, GCCollectionMode.Forced" in quant_cs, "BUG-TB1: OnnxMobileQuantizer must compact LOH after heavy W8A16 quantization"
+    ort_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NativeOnnxRuntimeBridge.cs").read_text(encoding="utf-8")
+    assert "LargeObjectHeapCompactionMode" in ort_cs, "BUG-TB1: NativeOnnxRuntimeBridge must compact LOH post-quantization before CreateSession"
+    nw_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    assert "neuralAutoBindCts" in nw_cs and "loadedSpatialKey" in nw_cs, "BUG-TB1: TryAutoBindCachedNeuralStemsAsync must cancel overlapping runs and avoid double-loading same CacheKey"
+    rpe_stream = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Rendering" / "RealtimePlayerEngine.Streaming.cs").read_text(encoding="utf-8")
+    assert "ScheduleBackgroundLohCompaction" in rpe_stream, "BUG-TB1: RealtimePlayerEngine.LoadTrack must trigger background LOH compaction when dropping neural stems"
+
+    # BUG-TB2: Zero UI-thread File.Exists in TryAutoBindCachedNeuralStemsAsync, OpenFileAsync, Settings.Diagnostics
+    diag_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Diagnostics.cs").read_text(encoding="utf-8")
+    assert "Task.Run(() => {\n                bool exists = File.Exists(logPath);" in diag_cs, "BUG-TB2: ExportLogBtn must check File.Exists(logPath) off UI thread"
+    lb_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.LiveBridge.cs").read_text(encoding="utf-8")
+    assert "await Task.Run(() => File.Exists(path))" in lb_cs, "BUG-TB2: OpenFileAsync must check File.Exists off UI thread"
+    autobind_head = nw_cs[nw_cs.index("void TryAutoBindCachedNeuralStemsAsync"):nw_cs.index("_ = Task.Run(async () =>")]
+    assert "File.Exists" not in autobind_head, "BUG-TB2: TryAutoBindCachedNeuralStemsAsync must not call File.Exists on UI thread"
+
+    # BUG-TB3: Library tab fast-path + EnsureTabLaidOut + LiveBridgeConfig Medium budget
+    nav_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Navigation.cs").read_text(encoding="utf-8")
+    assert "RefreshMiniPlayerUi();" in nav_cs, "BUG-TB3: SwitchTabInternal(0) must fast-path RefreshMiniPlayerUi when NowPlaying sheet is closed"
+    assert "if (tab.Width > 0 && tab.Height > 0)" in lb_cs, "BUG-TB3: EnsureTabLaidOut must skip synchronous re-measure on already laid-out tabs"
+
+    # BUG-TB4: 3-tab canonical parity across federation.json, LiveDiagnosticBridgeService, and cavern_bug_hunter.py
+    fed = json.loads((REPO_ROOT / ".agents" / "federation.json").read_text(encoding="utf-8"))
+    assert fed["repos"]["cavern"]["packaging"]["tabNames"] == ["library", "sound", "export"], "BUG-TB4: federation.json tabNames must be ['library','sound','export']"
+    svc_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LiveDiagnosticBridgeService.cs").read_text(encoding="utf-8")
+    assert 'CanonicalTabNames = ["library", "sound", "export"]' in svc_cs, "BUG-TB4: LiveDiagnosticBridgeService.CanonicalTabNames must match 3-tab shell"
+    np_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NowPlayingSheet.cs").read_text(encoding="utf-8")
+    assert "miniPlayerPlayBtn" in np_cs and "ContentDescription" in np_cs, "BUG-TB4: miniPlayerPlayBtn must set ContentDescription for Play rage-click targeting"
+
+    # BUG-TB5: font_130 Mode: Pro >= 12.5f & 2-line wrap on library card titles
+    sc_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Core.cs").read_text(encoding="utf-8")
+    assert "settingsModeToggleBtn.TextSize = 12.5f;" in sc_cs, "BUG-TB5: settingsModeToggleBtn.TextSize must be >=12.5f (>=9.6sp at font_130)"
+    lv_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.LibraryViews.cs").read_text(encoding="utf-8")
+    assert lv_cs.count("SetMaxLines(2)") >= 7, "BUG-TB5: LibraryViews title/subtitle labels must allow 2-line wrapping at font_130"
+
+    # BUG-TB6: Stale underrun reset when idle/starting
+    ao_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8")
+    ao_tt = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.TransportAndTelemetry.cs").read_text(encoding="utf-8")
+    assert "Diagnostics = Diagnostics with { UnderrunCount = 0 };" in ao_cs, "BUG-TB6: AndroidAudioOutput Start/Stop must clear stale UnderrunCount"
+    assert "!running || (!engine.IsPlaying && !engine.IsLiveMonitoringOrCalibrating)" in ao_tt, "BUG-TB6: LastAudioTrackUnderrunCount must return 0 when stopped/idle"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -6795,6 +6900,7 @@ PYTHON_CHECKS = [
     ("PY_T17_W55_3_And_W57_2_Dedup_Coordinator_ListenerCtx_VbrEac3_Ffmpeg", _py_stage17_w55_3_and_w57_2_contracts),
     ("PY_T18_W55_5_And_W57_3_OneUi9GlassPopups_Gestures_FilterStudio_Tools", _py_stage18_w55_5_and_w57_3_contracts),
     ("PY_T19_V29102_Bugs_And_Epoch5_Contracts", _py_stage19_v29102_bugs_and_epoch5_contracts),
+    ("PY_T20_TrackB_LiveQaRemediation_Contracts", _py_stage20_trackb_live_qa_remediation_contracts),
 ]
 
 

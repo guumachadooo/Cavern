@@ -438,7 +438,11 @@ public partial class MainActivity {
         UpdateTopShellHeaderTitle();
         SetBottomNavBarVisible(!isNowPlayingSheetOpen, animate: false);
         if (idx == 0) {
-            RefreshMusicPlayerUi();
+            if (isNowPlayingSheetOpen) {
+                RefreshMusicPlayerUi();
+            } else {
+                RefreshMiniPlayerUi();
+            }
         } else if (idx == 1) {
             if (prevTab == 1) {
                 OpenSettingsCategory(-1);

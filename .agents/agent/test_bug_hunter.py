@@ -1089,6 +1089,9 @@ class BugHunterUnitTests(unittest.TestCase):
         src = (AGENT_DIR / "cavern_bug_hunter.py").read_text(encoding="utf-8")
         self.assertIn('"Tab0:PlayButton"', src)
         self.assertIn('"type": "FrameLayout", "text": "Play"', src)
+        self.assertIn('"Tab2:ExportButton"', src)
+        self.assertIn('((0, "Tab0"), (1, "Tab1"), (2, "Tab2"))', src)
+        self.assertNotIn('"Tab4:SettingsButton"', src)
 
 
 if __name__ == "__main__":

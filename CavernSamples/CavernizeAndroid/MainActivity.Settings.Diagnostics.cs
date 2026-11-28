@@ -47,11 +47,22 @@ public partial class MainActivity {
         }, active: true);
         Button exportLogBtn = PillButton(S["ExportLogBtn"], () => {
             string logPath = AppLogger.SharedLogPath;
-            if (!string.IsNullOrEmpty(logPath) && File.Exists(logPath)) {
-                ShareLocalFile(logPath);
-            } else {
+            if (string.IsNullOrEmpty(logPath)) {
                 Toast.MakeText(this, S["LogFileNotAvailableToast"], ToastLength.Short).Show();
+                return;
             }
+            _ = Task.Run(() => {
+                bool exists = File.Exists(logPath);
+                if (!uiDestroyed) {
+                    RunOnUiThread(() => {
+                        if (exists) {
+                            ShareLocalFile(logPath);
+                        } else {
+                            Toast.MakeText(this, S["LogFileNotAvailableToast"], ToastLength.Short).Show();
+                        }
+                    });
+                }
+            });
         });
         Button clearLogBtn = PillButton(S["ClearLogBtn"], () => {
             AppLogger.Clear(this);

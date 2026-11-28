@@ -622,6 +622,11 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                         quantizedModelPath = resolvedQuant;
                         hasValidQuantCache = true;
                     }
+                    if (modelBytes >= 120L * 1024L * 1024L) {
+                        System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                            System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                    }
                 }
 
                 // Wave E (W53.5): SoC-keyed QNN HTP context binary cache (Build.Fingerprint + SocModel + ORT + model SHA-256)

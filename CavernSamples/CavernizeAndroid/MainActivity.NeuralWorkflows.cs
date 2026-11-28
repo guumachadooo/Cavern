@@ -37,6 +37,7 @@ namespace CavernizeAndroid;
 
 public partial class MainActivity {
     readonly Dictionary<string, (double OffsetSamples, double DriftPpm, int SampleRate, float Confidence)> crossVariantOffsetByCanonicalSong = new(StringComparer.OrdinalIgnoreCase);
+    CancellationTokenSource neuralAutoBindCts;
 
     (double OffsetSamples, double DriftPpm, bool HasAlignment) ComputeCrossVariantNeuralAlignment(CavernizeTrack targetTrack, string targetPath) {
         if (targetTrack == null || playerEngine?.NeuralStage == null) {
@@ -242,6 +243,8 @@ public partial class MainActivity {
 
     void CancelNeuralTrackPrep(bool silent = false) {
         neuralPrepGeneration++;
+        CancellationTokenSource prevAutoCts = Interlocked.Exchange(ref neuralAutoBindCts, null);
+        try { prevAutoCts?.Cancel(); } catch { }
         CancellationTokenSource prevPrepCts = neuralPrepCts;
         neuralPrepCts = null;
         try {
@@ -468,92 +471,126 @@ public partial class MainActivity {
             return;
         }
         string sourceKey = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
-        if (string.IsNullOrEmpty(sourceKey) || !File.Exists(sourceKey)) {
+        if (string.IsNullOrEmpty(sourceKey)) {
             return;
         }
         int gen = neuralPrepGeneration;
+        CancellationTokenSource myAutoCts = new();
+        CancellationTokenSource prevAutoCts = Interlocked.Exchange(ref neuralAutoBindCts, myAutoCts);
+        try { prevAutoCts?.Cancel(); } catch { }
+        CancellationToken autoCt = myAutoCts.Token;
         Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
         int sr = activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
+        string summaryTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+            ? currentMediaMeta.Title
+            : Path.GetFileNameWithoutExtension(sourceKey);
+        string summaryArtist = (currentMediaMeta?.Artist ?? "").Trim();
+        bool cloudEnabled = CanUseMvsepCloud(cfg);
+        string cloudSpatialSig = cloudEnabled
+            ? BuildMvsepPlanSignature(ResolveMvsepPresetForGoal(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, cfg), cfg)
+            : null;
+        string cloudKaraSig = cloudEnabled
+            ? BuildMvsepPlanSignature(ResolveMvsepPresetForGoal(Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke, cfg), cfg)
+            : null;
 
         _ = Task.Run(async () => {
             try {
                 try { Android.OS.Process.SetThreadPriority(Android.OS.ThreadPriority.Background); } catch { }
                 if (startupDelayMs > 0) {
-                    await Task.Delay(startupDelayMs).ConfigureAwait(false);
+                    await Task.Delay(startupDelayMs, autoCt).ConfigureAwait(false);
                 }
-                if (uiDestroyed || gen != neuralPrepGeneration) {
+                autoCt.ThrowIfCancellationRequested();
+                if (uiDestroyed || gen != neuralPrepGeneration || !File.Exists(sourceKey)) {
                     return;
                 }
                 FileInfo fi = new(sourceKey);
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack spatialUpmixTrack = null;
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack karaokeTrack = null;
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack dnaTrack = null;
+                string loadedSpatialKey = null;
+                string loadedKaraokeKey = null;
 
-                string summaryTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
-                    ? currentMediaMeta.Title
-                    : Path.GetFileNameWithoutExtension(sourceKey);
-                string summaryArtist = (currentMediaMeta?.Artist ?? "").Trim();
-
-                // W48 + BP W3: Cache-first auto-bind for BOTH Spatial Upmix AND Karaoke caches across backend/preset changes
+                // W48 + BUG-TB1: Cache-first auto-bind with single-load deduplication (never decode same .ntc twice into LOH)
                 Cavernize.Logic.Spatial.NeuralExecutionPlan spatialPlan = neuralOrchestrator.BuildPlan(
                     Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, cfg);
-                if (CanUseMvsepCloud(cfg)) {
-                    Cavernize.Logic.Spatial.MvsepAlgorithmPreset cloudSpatialPreset =
-                        ResolveMvsepPresetForGoal(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, cfg);
+                if (cloudEnabled && !string.IsNullOrEmpty(cloudSpatialSig)) {
                     string cloudSpatialKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
-                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, BuildMvsepPlanSignature(cloudSpatialPreset, cfg));
-                    if (neuralTrackCache.TryLoad(cloudSpatialKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedCloudSpatial)) {
+                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, cloudSpatialSig);
+                    if (neuralTrackCache.TryLoad(cloudSpatialKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedCloudSpatial, autoCt)) {
                         spatialUpmixTrack = cachedCloudSpatial;
+                        loadedSpatialKey = cloudSpatialKey;
                     }
                 }
                 if (spatialUpmixTrack == null && spatialPlan.IsRunnable) {
                     string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
                         sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, spatialPlan.PlanSignature);
-                    if (neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedSpatial)) {
+                    if (neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedSpatial, autoCt)) {
                         spatialUpmixTrack = cachedSpatial;
+                        loadedSpatialKey = cacheKey;
                     }
                 }
-                if (spatialUpmixTrack == null &&
-                    neuralTrackCache.TryLoadBestForSourceTrack(
-                        sourceKey, summaryTitle, summaryArtist,
-                        Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
-                        out Cavernize.Logic.Spatial.NeuralSeparatedTrack fallbackSpatial)) {
-                    spatialUpmixTrack = fallbackSpatial;
+                if (spatialUpmixTrack == null) {
+                    IReadOnlyList<Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo> spEntries =
+                        neuralTrackCache.FindEntriesForTrack(sourceKey, summaryTitle, summaryArtist, Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation);
+                    if (spEntries != null && spEntries.Count > 0) {
+                        string bestSpKey = spEntries[0].CacheKey;
+                        if (neuralTrackCache.TryLoad(bestSpKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack fallbackSpatial, autoCt)) {
+                            spatialUpmixTrack = fallbackSpatial;
+                            loadedSpatialKey = bestSpKey;
+                        }
+                    }
                 }
 
+                autoCt.ThrowIfCancellationRequested();
                 Cavernize.Logic.Spatial.NeuralExecutionPlan karaokePlan = neuralOrchestrator.BuildPlan(
                     Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke, cfg);
-                if (CanUseMvsepCloud(cfg)) {
-                    Cavernize.Logic.Spatial.MvsepAlgorithmPreset cloudKaraPreset =
-                        ResolveMvsepPresetForGoal(Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke, cfg);
+                if (cloudEnabled && !string.IsNullOrEmpty(cloudKaraSig)) {
                     string cloudKaraKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
-                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, BuildMvsepPlanSignature(cloudKaraPreset, cfg));
-                    if (neuralTrackCache.TryLoad(cloudKaraKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedCloudKara)) {
+                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, cloudKaraSig);
+                    if (!string.Equals(cloudKaraKey, loadedSpatialKey, StringComparison.OrdinalIgnoreCase) &&
+                        neuralTrackCache.TryLoad(cloudKaraKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedCloudKara, autoCt)) {
                         karaokeTrack = cachedCloudKara;
+                        loadedKaraokeKey = cloudKaraKey;
                     }
                 }
                 if (karaokeTrack == null && karaokePlan.IsRunnable) {
                     string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
                         sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, karaokePlan.PlanSignature);
-                    if (neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedKaraoke)) {
+                    if (!string.Equals(cacheKey, loadedSpatialKey, StringComparison.OrdinalIgnoreCase) &&
+                        neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedKaraoke, autoCt)) {
                         karaokeTrack = cachedKaraoke;
+                        loadedKaraokeKey = cacheKey;
                     }
                 }
-                if (karaokeTrack == null &&
-                    neuralTrackCache.TryLoadBestForSourceTrack(
-                        sourceKey, summaryTitle, summaryArtist,
-                        Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke,
-                        out Cavernize.Logic.Spatial.NeuralSeparatedTrack fallbackKaraoke)) {
-                    karaokeTrack = fallbackKaraoke;
+                if (karaokeTrack == null) {
+                    IReadOnlyList<Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo> krEntries =
+                        neuralTrackCache.FindEntriesForTrack(sourceKey, summaryTitle, summaryArtist, Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke);
+                    if (krEntries != null && krEntries.Count > 0) {
+                        string bestKrKey = krEntries[0].CacheKey;
+                        bool spatialAlreadyHasVocals = spatialUpmixTrack != null &&
+                            (spatialUpmixTrack.MonoLeadVocalRef != null ||
+                             spatialUpmixTrack.FindStem("lead_vocal") != null ||
+                             spatialUpmixTrack.FindStem("vocals") != null);
+                        // Reuse in-memory spatialUpmixTrack whenever top karaoke entry IS the same bundle (or shares CacheKey)
+                        if (!string.Equals(bestKrKey, loadedSpatialKey, StringComparison.OrdinalIgnoreCase) &&
+                            (!spatialAlreadyHasVocals || krEntries[0].StemCount <= 4)) {
+                            if (neuralTrackCache.TryLoad(bestKrKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack fallbackKaraoke, autoCt)) {
+                                karaokeTrack = fallbackKaraoke;
+                                loadedKaraokeKey = bestKrKey;
+                            }
+                        }
+                    }
                 }
 
-                // Also check dedicated Slot 7A VocalMixDna cache (includes Dereverb dry/wet analysis when available)
+                // Also check dedicated Slot 7A VocalMixDna cache (skip if already loaded above)
                 Cavernize.Logic.Spatial.NeuralExecutionPlan dnaPlan = neuralOrchestrator.BuildPlan(
                     Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna, cfg);
                 if (dnaPlan.IsRunnable) {
                     string dnaCacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
                         sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, dnaPlan.PlanSignature);
-                    if (neuralTrackCache.TryLoad(dnaCacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedDnaTrack)) {
+                    if (!string.Equals(dnaCacheKey, loadedSpatialKey, StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(dnaCacheKey, loadedKaraokeKey, StringComparison.OrdinalIgnoreCase) &&
+                        neuralTrackCache.TryLoad(dnaCacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedDnaTrack, autoCt)) {
                         dnaTrack = cachedDnaTrack;
                     }
                 }
@@ -562,7 +599,7 @@ public partial class MainActivity {
                 // Never applies an unaligned cross-variant karaoke stem at offset 0; rejects incompatible studio masters cleanly.
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack crossRef = karaokeTrack ?? spatialUpmixTrack;
                 if (crossRef != null &&
-                    !EnsureCrossVariantAlignmentForCachedTrack(activeTrack, sourceKey, summaryTitle, sr, ffmpeg?.Found == true ? ffmpeg.Location : null, crossRef, CancellationToken.None)) {
+                    !EnsureCrossVariantAlignmentForCachedTrack(activeTrack, sourceKey, summaryTitle, sr, ffmpeg?.Found == true ? ffmpeg.Location : null, crossRef, autoCt)) {
                     karaokeTrack = null;
                 }
 
@@ -574,8 +611,9 @@ public partial class MainActivity {
                     SaveCachedSongVocalDna(activeTrack, extractedDna);
                 }
 
+                autoCt.ThrowIfCancellationRequested();
                 if (spatialUpmixTrack != null || karaokeTrack != null || extractedDna != null) {
-                    if (spatialUpmixTrack != null && !uiDestroyed && gen == neuralPrepGeneration && GetActiveTrack() == activeTrack) await playerEngine.BindSpatialUpmixTrackAsync(spatialUpmixTrack).ConfigureAwait(false);
+                    if (spatialUpmixTrack != null && !uiDestroyed && gen == neuralPrepGeneration && GetActiveTrack() == activeTrack) await playerEngine.BindSpatialUpmixTrackAsync(spatialUpmixTrack, autoCt).ConfigureAwait(false);
                     if (karaokeTrack != null && !uiDestroyed && gen == neuralPrepGeneration && GetActiveTrack() == activeTrack) playerEngine.BindKaraokeReferenceTrack(karaokeTrack);
                     RunOnUiThread(() => {
                         if (uiDestroyed || gen != neuralPrepGeneration || GetActiveTrack() != activeTrack) return;
@@ -584,8 +622,12 @@ public partial class MainActivity {
                         NotifyUiDomainChanged(UiStateDomain.Neural | UiStateDomain.Playback | UiStateDomain.Upmix, immediate: true);
                     });
                 }
+            } catch (System.OperationCanceledException) {
+                // Superseded by newer track load
             } catch (Exception ex) {
                 AppLogger.Warn($"W18/W19.b/W48 TryAutoBindCachedNeuralStemsAsync: {ex.Message}");
+            } finally {
+                try { myAutoCts.Dispose(); } catch { }
             }
         });
     }
@@ -740,18 +782,19 @@ public partial class MainActivity {
         if (cfg.UseLosslessTwinForKaraoke &&
             activeLosslessTwin != null &&
             activeLosslessTwin.HasSyncedLosslessTwin &&
-            !string.IsNullOrEmpty(activeLosslessTwin.Metadata?.FilePath) &&
-            File.Exists(activeLosslessTwin.Metadata.FilePath)) {
+            !string.IsNullOrEmpty(activeLosslessTwin.Metadata?.FilePath)) {
             decodePath = activeLosslessTwin.Metadata.FilePath;
             derivedFromTwin = true;
         }
-        if (string.IsNullOrEmpty(decodePath) || !File.Exists(decodePath)) {
+        if (string.IsNullOrEmpty(decodePath)) {
             if (!silentIfNotReady) {
                 Toast.MakeText(this, S["NeuralPrepNoTrackToast"], ToastLength.Short).Show();
             }
             return;
         }
 
+        CancellationTokenSource prevAutoCts = Interlocked.Exchange(ref neuralAutoBindCts, null);
+        try { prevAutoCts?.Cancel(); } catch { }
         CancellationTokenSource prevPrepCts = neuralPrepCts;
         CancellationTokenSource myPrepCts = new();
         neuralPrepCts = myPrepCts;
@@ -782,6 +825,13 @@ public partial class MainActivity {
         _ = Task.Run(async () => {
             try {
                 ct.ThrowIfCancellationRequested();
+                if (derivedFromTwin && !File.Exists(decodePath)) {
+                    decodePath = activePath;
+                    derivedFromTwin = false;
+                }
+                if (string.IsNullOrEmpty(decodePath) || !File.Exists(decodePath)) {
+                    throw new FileNotFoundException("Audio track file not found for neural separation.", decodePath);
+                }
                 FileInfo keyInfo = new(activePath);
 
                 // Fast path for VocalMixDna: if full separated stems for this track are already loaded in RAM or cached on disk,
@@ -1046,6 +1096,14 @@ public partial class MainActivity {
                             : null;
 
                     try {
+                        // BUG-TB1: Reclaim prior LOH stem buffers before local ONNX allocates native/WebGPU tensors
+                        if (reusableStage1 == null && goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) {
+                            lastChoreoBuiltStemTrack = null;
+                            playerEngine?.BindSpatialUpmixTrack(null);
+                        }
+                        System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                            System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
                         (separated, rtf, fromCache) = neuralOrchestrator.ExecuteTrackPipeline(
                             sourceTrackKey: activePath,
                             fileSizeBytes: keyInfo.Length,

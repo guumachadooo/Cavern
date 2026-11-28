@@ -231,7 +231,7 @@ public partial class MainActivity : ILiveBridgeAppHost {
         if (tab == null || tab.Visibility != ViewStates.Visible) {
             return;
         }
-        if (tab.Width > 0 && tab.Height > 0 && !tab.IsLayoutRequested) {
+        if (tab.Width > 0 && tab.Height > 0) {
             return;
         }
         View host = (tab.Parent as View) ?? rootFrameHost ?? Window?.DecorView;
@@ -763,13 +763,17 @@ public partial class MainActivity : ILiveBridgeAppHost {
         }
     });
 
-    Task<(bool ok, string message)> ILiveBridgeAppHost.OpenFileAsync(string path, bool autoPlay, int? switchToTab) => RunOnUiThreadWithTimeoutAsync(() => {
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) {
+    async Task<(bool ok, string message)> ILiveBridgeAppHost.OpenFileAsync(string path, bool autoPlay, int? switchToTab) {
+        bool exists = !string.IsNullOrWhiteSpace(path) &&
+            await Task.Run(() => File.Exists(path)).ConfigureAwait(false);
+        if (!exists) {
             return (false, $"File not found: '{path}'");
         }
-        OpenLocalPathWithFallbackAsync(path, switchToTab: switchToTab, autoPlay: autoPlay, bypassBusyGuard: true);
-        return (true, $"Opening '{System.IO.Path.GetFileName(path)}' (autoPlay={autoPlay}).");
-    });
+        return await RunOnUiThreadWithTimeoutAsync(() => {
+            OpenLocalPathWithFallbackAsync(path, switchToTab: switchToTab, autoPlay: autoPlay, bypassBusyGuard: true);
+            return (true, $"Opening '{System.IO.Path.GetFileName(path)}' (autoPlay={autoPlay}).");
+        }).ConfigureAwait(false);
+    }
 
     Task<(bool ok, string message)> ILiveBridgeAppHost.ExecuteUiActionAsync(string action, string message) => RunOnUiThreadWithTimeoutAsync(() => {
         switch ((action ?? "").Trim().ToLowerInvariant()) {

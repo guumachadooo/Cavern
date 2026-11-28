@@ -3808,8 +3808,8 @@ class LiveBugHunter:
             # 6c-1. Hostile Rage-Clicks across Play / 3D Room / Settings interactive controls
             for r_tab, r_label, r_args in (
                 (0, "Tab0:PlayButton", {"action": "rage_click", "type": "FrameLayout", "text": "Play", "index": 0, "count": 6, "intervalMs": 22}),
-                (1, "Tab1:3DRoomButton", {"action": "rage_click", "type": "Button", "index": 0, "count": 6, "intervalMs": 22}),
-                (4, "Tab4:SettingsButton", {"action": "rage_click", "type": "Button", "index": 0, "count": 5, "intervalMs": 25}),
+                (1, "Tab1:SoundButton", {"action": "rage_click", "type": "Button", "index": 0, "count": 6, "intervalMs": 22}),
+                (2, "Tab2:ExportButton", {"action": "rage_click", "type": "Button", "index": 0, "count": 5, "intervalMs": 25}),
             ):
                 self.bridge.cmd("tab_switch", {"index": r_tab}, tier=1, timeout_sec=15)
                 rc = self.bridge.cmd("ui_interact", r_args, tier=2, timeout_sec=20)
@@ -3889,7 +3889,7 @@ class LiveBugHunter:
                             )
 
             # 6c-4. Reversible 1.3x Font-Scale & Landscape Orientation Reflow Audit
-            for rf_tab, rf_label in ((0, "Tab0"), (1, "Tab1"), (4, "Tab4")):
+            for rf_tab, rf_label in ((0, "Tab0"), (1, "Tab1"), (2, "Tab2")):
                 self.bridge.cmd("tab_switch", {"index": rf_tab}, tier=1, timeout_sec=15)
                 rp = self.bridge.cmd(
                     "ui_interact",

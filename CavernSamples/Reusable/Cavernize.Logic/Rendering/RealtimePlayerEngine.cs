@@ -104,6 +104,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     float cachedHybridEffect = float.NaN;
     int hybrid714BuildCount;
     long pipelineConfigGen;
+    int lohCompactPending;
     volatile bool isDisposed;
     ProgressiveNeuralStemUpdater progressiveNeuralUpdater;
     readonly CompositePreHrtfBusProcessor compositePreHrtfBus = new();

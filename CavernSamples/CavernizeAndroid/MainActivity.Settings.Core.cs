@@ -216,7 +216,7 @@ public partial class MainActivity {
             isSettingsProMode ? S["SettingsModeProChip"] : S["SettingsModeEssentialChip"],
             () => SetSettingsProMode(!isSettingsProMode),
             active: isSettingsProMode);
-        settingsModeToggleBtn.TextSize = 11.5f;
+        settingsModeToggleBtn.TextSize = 12.5f;
         settingsModeToggleBtn.SetMinimumWidth(Dp(72));
         settingsModeToggleBtn.SetMinimumHeight(Dp(34));
         settingsModeToggleBtn.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
@@ -889,8 +889,7 @@ public partial class MainActivity {
         if (ffmpegStatusText == null) {
             return;
         }
-        string localPath = FFmpegInstallerService.ResolveExistingFFmpegPath(this, store);
-        bool hasLocal = ffmpeg.Found || (!string.IsNullOrEmpty(localPath) && File.Exists(localPath));
+        bool hasLocal = ffmpeg.Found || latestFFmpegStatus?.IsInstalled == true;
         bool working = latestFFmpegStatus != null ? latestFFmpegStatus.IsWorking : hasLocal;
         if (hasLocal && working) {
             string ver = !string.IsNullOrEmpty(latestFFmpegStatus?.InstalledVersion)
@@ -914,8 +913,7 @@ public partial class MainActivity {
         if (truehddStatusText == null) {
             return;
         }
-        string localPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
-        bool hasLocal = !string.IsNullOrEmpty(localPath) && File.Exists(localPath);
+        bool hasLocal = latestTruehddStatus?.IsInstalled == true || !string.IsNullOrEmpty(store.InstalledTruehddVersion);
         if (hasLocal) {
             string ver = !string.IsNullOrEmpty(latestTruehddStatus?.InstalledVersion)
                 ? latestTruehddStatus.InstalledVersion
@@ -956,7 +954,7 @@ public partial class MainActivity {
             updateSettingsStatusText.Text = string.Format(S["UpdateAvailableBanner"], latestUpdateInfo.RemoteVersion) + $" ({sizeMb:0.0} MB)";
             updateSettingsStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
             downloadInstallBtn.Visibility = ViewStates.Visible;
-            downloadInstallBtn.Text = !string.IsNullOrEmpty(downloadedUpdateApkPath) && File.Exists(downloadedUpdateApkPath)
+            downloadInstallBtn.Text = !string.IsNullOrEmpty(downloadedUpdateApkPath)
                 ? S["InstallReadyBtn"]
                 : S["DownloadInstallBtn"];
         } else if (latestUpdateInfo != null) {

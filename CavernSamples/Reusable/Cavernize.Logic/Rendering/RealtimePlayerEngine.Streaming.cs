@@ -53,6 +53,11 @@ public sealed partial class RealtimePlayerEngine {
             telemetryFramesSincePublish = int.MaxValue / 2;
             OutputPipelineLatencySeconds = 0.0;
 
+            bool hadBoundNeuralStems =
+                neuralStemStage.ActiveSpatialUpmixTrack != null ||
+                neuralStemStage.ActiveKaraokeTrack != null ||
+                cachedHybridTrack != null;
+
             if (neuralStemStage.ActiveSpatialUpmixTrack != null &&
                 !MatchesSeparatedTrack(neuralStemStage.ActiveSpatialUpmixTrack, track)) {
                 neuralStemStage.BindSpatialUpmixTrack(null);
@@ -62,6 +67,13 @@ public sealed partial class RealtimePlayerEngine {
             if (neuralStemStage.ActiveKaraokeTrack != null &&
                 !MatchesSeparatedTrack(neuralStemStage.ActiveKaraokeTrack, track)) {
                 neuralStemStage.BindKaraokeReferenceTrack(null);
+            }
+            if (hadBoundNeuralStems &&
+                neuralStemStage.ActiveSpatialUpmixTrack == null &&
+                neuralStemStage.ActiveKaraokeTrack == null) {
+                cachedActiveSources = Array.Empty<Source>();
+                liveNeuralSources = Array.Empty<Source>();
+                ScheduleBackgroundLohCompaction();
             }
             isPreviewingRecordedPerformance = false;
             previewPerformanceTake = null;
@@ -752,6 +764,26 @@ public sealed partial class RealtimePlayerEngine {
             stereoOutput[dst] += previewVocalScratch[f * 2];
             stereoOutput[dst + 1] += previewVocalScratch[f * 2 + 1];
         }
+    }
+
+    void ScheduleBackgroundLohCompaction() {
+        if (isDisposed || Interlocked.Exchange(ref lohCompactPending, 1) != 0) {
+            return;
+        }
+        _ = Task.Run(() => {
+            try {
+                if (isDisposed) {
+                    return;
+                }
+                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            } catch {
+                // Best-effort memory compaction
+            } finally {
+                Interlocked.Exchange(ref lohCompactPending, 0);
+            }
+        });
     }
 
 }

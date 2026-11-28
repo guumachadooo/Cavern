@@ -166,26 +166,36 @@ public static class OnnxMobileQuantizer {
         string tempPath = null;
         try {
             byte[] srcBytes = File.ReadAllBytes(sourcePath);
+            long srcLen = srcBytes.Length;
             OnnxW8A16QuantizationResult res = ConvertBytesToW8A16(srcBytes, out byte[] dstBytes);
+            srcBytes = null;
             if (!res.Success || dstBytes == null || dstBytes.Length < 64) {
                 return res;
             }
+            long dstLen = dstBytes.Length;
             string dir = Path.GetDirectoryName(destinationPath);
             if (!string.IsNullOrEmpty(dir)) {
                 Directory.CreateDirectory(dir);
             }
             tempPath = $"{destinationPath}.tmp.{Guid.NewGuid():N}";
             File.WriteAllBytes(tempPath, dstBytes);
+            dstBytes = null;
             File.Move(tempPath, destinationPath, overwrite: true);
             tempPath = null;
+
+            if (srcLen >= HeavyModelAutoW8A16ThresholdBytes) {
+                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            }
 
             return new OnnxW8A16QuantizationResult {
                 Success = true,
                 QuantizedTensors = res.QuantizedTensors,
                 PreservedTensors = res.PreservedTensors,
                 QuantizedElements = res.QuantizedElements,
-                InputBytes = srcBytes.Length,
-                OutputBytes = dstBytes.Length,
+                InputBytes = srcLen,
+                OutputBytes = dstLen,
                 MinTensorSnrDb = res.MinTensorSnrDb,
                 MeanTensorSnrDb = res.MeanTensorSnrDb,
                 ElapsedMs = sw.Elapsed.TotalMilliseconds,

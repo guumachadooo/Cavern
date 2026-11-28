@@ -608,14 +608,16 @@ public partial class MainActivity {
         TextView titleTv = Label(alb.AlbumTitle, 13f, ColText);
         titleTv.SetTypeface(sfBold, TypefaceStyle.Bold);
         titleTv.SetIncludeFontPadding(false);
-        titleTv.SetSingleLine(true);
+        titleTv.SetSingleLine(false);
+        titleTv.SetMaxLines(2);
         titleTv.Ellipsize = TextUtils.TruncateAt.End;
         tile.AddView(titleTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         TextView subTv = Label($"{alb.Artist} • {trackCount}", 11f, OneUiTheme.TextMuted);
         subTv.SetTypeface(sfReg, TypefaceStyle.Normal);
         subTv.SetIncludeFontPadding(false);
-        subTv.SetSingleLine(true);
+        subTv.SetSingleLine(false);
+        subTv.SetMaxLines(2);
         subTv.Ellipsize = TextUtils.TruncateAt.End;
         tile.AddView(subTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(3)
@@ -778,7 +780,8 @@ public partial class MainActivity {
 
         TextView titleTv = Label(title, 15.5f, ColText);
         titleTv.SetTypeface(OneUiTheme.GetAppleFontBold(this), TypefaceStyle.Bold);
-        titleTv.SetSingleLine(true);
+        titleTv.SetSingleLine(false);
+        titleTv.SetMaxLines(2);
         titleTv.Ellipsize = TextUtils.TruncateAt.End;
         hdrCard.AddView(titleTv);
 
@@ -870,11 +873,13 @@ public partial class MainActivity {
         TextView tv = Label(title, 13.5f, ColText);
         tv.SetTypeface(OneUiTheme.GetAppleFontBold(this), TypefaceStyle.Bold);
         tv.SetIncludeFontPadding(false);
-        tv.SetSingleLine(true);
+        tv.SetSingleLine(false);
+        tv.SetMaxLines(2);
         tv.Ellipsize = TextUtils.TruncateAt.End;
         TextView stv = Label(sub, 11f, OneUiTheme.TextMuted);
         stv.SetIncludeFontPadding(false);
-        stv.SetSingleLine(true);
+        stv.SetSingleLine(false);
+        stv.SetMaxLines(2);
         stv.Ellipsize = TextUtils.TruncateAt.End;
         col.AddView(tv);
         col.AddView(stv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(3) });
@@ -952,7 +957,8 @@ public partial class MainActivity {
         TextView titleTv = Label(item.Title, 13.5f, isPlayingThis ? OneUiTheme.PrimaryHigh : ColText);
         titleTv.SetTypeface(OneUiTheme.GetAppleFontSemibold(this), TypefaceStyle.Bold);
         titleTv.SetIncludeFontPadding(false);
-        titleTv.SetSingleLine(true);
+        titleTv.SetSingleLine(false);
+        titleTv.SetMaxLines(2);
         titleTv.Ellipsize = TextUtils.TruncateAt.End;
 
         bool hasArtist = !string.IsNullOrWhiteSpace(item.Artist);
@@ -962,7 +968,8 @@ public partial class MainActivity {
             : (hasArtist ? item.Artist : (hasAlbum ? item.Album : item.FolderName));
         TextView subTv = Label(subLine, 11f, OneUiTheme.TextMuted);
         subTv.SetIncludeFontPadding(false);
-        subTv.SetSingleLine(true);
+        subTv.SetSingleLine(false);
+        subTv.SetMaxLines(2);
         subTv.Ellipsize = TextUtils.TruncateAt.End;
         col.AddView(titleTv);
         col.AddView(subTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(3) });

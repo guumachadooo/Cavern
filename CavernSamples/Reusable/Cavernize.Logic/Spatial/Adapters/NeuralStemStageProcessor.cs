@@ -291,6 +291,25 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         }
     }
 
+    static bool AreEquivalentTracks(NeuralSeparatedTrack a, NeuralSeparatedTrack b) {
+        if (ReferenceEquals(a, b)) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        return string.Equals(a.SourceTrackKey, b.SourceTrackKey, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(a.ModelSummary, b.ModelSummary, StringComparison.OrdinalIgnoreCase) &&
+               (a.Stems?.Count ?? 0) == (b.Stems?.Count ?? 0) &&
+               a.SampleRate == b.SampleRate;
+    }
+
+    static bool HasDirectVocalReference(NeuralSeparatedTrack track) =>
+        track != null &&
+        (track.MonoLeadVocalRef != null ||
+         track.FindStem("lead_vocal") != null ||
+         track.FindStem("vocals") != null);
+
     /// <summary>
     /// Binds a full-mix separated stem bundle exclusively for AI Spatial Upmix without clobbering any dedicated
     /// Karaoke vocal/backing track. If no dedicated Karaoke track is bound, its vocal stem also accelerates Karaoke.
@@ -298,6 +317,10 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     public void BindSpatialUpmixTrack(NeuralSeparatedTrack separatedTrack) {
         lock (stateLock) {
             activeSpatialUpmixTrack = separatedTrack;
+            if (separatedTrack != null && AreEquivalentTracks(separatedTrack, activeKaraokeTrack)) {
+                // Drop duplicate second copy in RAM; ActiveKaraokeTrack falls back to activeSpatialUpmixTrack
+                activeKaraokeTrack = null;
+            }
             if (activeKaraokeTrack == null) {
                 RebuildAlignedReferencesLocked();
                 karaokeEngine.ResetAdaptationState();
@@ -311,7 +334,14 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     /// </summary>
     public void BindKaraokeReferenceTrack(NeuralSeparatedTrack separatedTrack) {
         lock (stateLock) {
-            activeKaraokeTrack = separatedTrack;
+            if (separatedTrack != null &&
+                AreEquivalentTracks(separatedTrack, activeSpatialUpmixTrack) &&
+                HasDirectVocalReference(activeSpatialUpmixTrack)) {
+                // Avoid retaining two identical multi-stem tracks in LOH
+                activeKaraokeTrack = null;
+            } else {
+                activeKaraokeTrack = separatedTrack;
+            }
             RebuildAlignedReferencesLocked();
             karaokeEngine.ResetAdaptationState();
         }

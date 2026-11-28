@@ -190,7 +190,7 @@ public static partial class LiveDiagnosticBridgeService {
     }
 
     /// <summary>Canonical MainActivity bottom-navigation tab names synchronized with <c>.agents/federation.json</c>.</summary>
-    public static readonly string[] CanonicalTabNames = ["player", "room", "studio", "stems", "settings"];
+    public static readonly string[] CanonicalTabNames = ["library", "sound", "export"];
 
     /// <summary>Upper bound of valid MainActivity tab indices (derived from <see cref="CanonicalTabNames"/>).</summary>
     public static int MaxTabIndex => CanonicalTabNames.Length - 1;
@@ -233,9 +233,9 @@ public static partial class LiveDiagnosticBridgeService {
         new(BridgeCommandOpcode.UiPerfAudit, "ui_perf_audit", 1, "Run L12 Choreographer UI open-latency, main-thread block & dropped-frame jank profile ranked slowest-first", "{}"),
         new(BridgeCommandOpcode.AcousticProbe, "acoustic_probe", 1, "Run custom on-demand differential A/B psychoacoustic probe with arbitrary HRTF/ISM/MagLS/ITD/Yaw/Upmix/LGSR flags", "{profileId?:string, minPhase?:bool, magLsOrder?:0..3, bioItd?:bool, headWidthCm?:number, manualItdUs?:number, ismRoom?:bool, ismPreset?:0..4, ismLevel?:number, nearField?:bool, nearFieldDistM?:number, yawDeg?:number, pitchDeg?:number, sourceAzDeg?:number, sourceElDeg?:number, sampleRate?:number, upmix?:bool, lgsr?:bool, compareDirect?:bool, signal?:'white'|'pink'|'sine1k'|'impulse'}"),
         new(BridgeCommandOpcode.SettingsSet, "settings_set", 1, "Update non-secret AppSettingsStore property via reflection & refresh UI", "{key:string, value:any} or {values:{k:v}}"),
-        new(BridgeCommandOpcode.TabSwitch, "tab_switch", 1, "Switch MainActivity bottom navigation tab", "{index?:0..4, name?:'player'|'room'|'studio'|'stems'|'settings'}"),
+        new(BridgeCommandOpcode.TabSwitch, "tab_switch", 1, "Switch MainActivity bottom navigation tab", "{index?:0..2, name?:'library'|'sound'|'export'}"),
         new(BridgeCommandOpcode.PlaybackControl, "playback_control", 1, "Control real-time player playback", "{action:'play'|'pause'|'toggle'|'stop'|'next'|'prev'|'seek'|'seek_rel'|'loop', value?:number}"),
-        new(BridgeCommandOpcode.OpenFile, "open_file", 1, "Open a local audio/video file in Cavernize", "{path:string, autoPlay?:bool, tab?:0..4}"),
+        new(BridgeCommandOpcode.OpenFile, "open_file", 1, "Open a local audio/video file in Cavernize", "{path:string, autoPlay?:bool, tab?:0..2}"),
         new(BridgeCommandOpcode.UiAction, "ui_action", 1, "Invoke high-level app actions (refresh_ui, rescan_library, sync_logs_cloud, check_updates, reset_head_pose, dismiss_dialogs, bring_to_front, toast)", "{action:string, message?:string}"),
         new(BridgeCommandOpcode.UiClick, "ui_click", 1, "Find and click a visible clickable View matching text/contentDescription (MainActivity + dialogs)", "{text:string, index?:number}"),
         new(BridgeCommandOpcode.CacheClear, "cache_clear", 1, "Clear temporary app cache files cleanly", "{scope?:'cache'|'logs'}"),

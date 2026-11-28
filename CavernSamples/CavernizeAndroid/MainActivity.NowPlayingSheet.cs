@@ -174,6 +174,7 @@ public partial class MainActivity {
         miniPlayerPlayBtn = new FrameLayout(this) {
             Clickable = true,
             Focusable = true,
+            ContentDescription = !string.IsNullOrWhiteSpace(S["Play"]) ? S["Play"] : "Play",
             Background = OneUiTheme.CreateRippleRoundedDrawable(this, Color.Argb(36, 255, 255, 255), 99f)
         };
         miniPlayerPlayIcon = new OneUiIconView(this, OneUiIconType.Play, ColText);
@@ -487,6 +488,9 @@ public partial class MainActivity {
         bool wasOpen = isNowPlayingSheetOpen;
         isNowPlayingSheetOpen = true;
         isLibrarySectionOpen = false;
+        if (!wasOpen) {
+            RefreshMusicPlayerUi();
+        }
         SelectNowPlayingSubView(Math.Clamp(subViewIndex, 0, 2));
 
         if (librarySearchInput != null) {

@@ -689,6 +689,9 @@ public sealed partial class AndroidAudioOutput {
                     // Fall through to cached diagnostics
                 }
             }
+            if (!running || (!engine.IsPlaying && !engine.IsLiveMonitoringOrCalibrating)) {
+                return 0;
+            }
             return Diagnostics.UnderrunCount;
         }
     }
