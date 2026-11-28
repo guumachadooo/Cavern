@@ -105,10 +105,10 @@ class SimulatedChaosBridge:
             "HeadphoneVirtualizer": True,
             "TransauralXtcEnabled": False,
             "IsmRoomEnabled": True,
-            "SpatialUpmixEnabled": False,
-            "CavernizeUpmixEnabled": False,
-            "AtmosAwareEnabled": True,
-            "NeuralSpatialUpmixEnabled": False,
+            "MatrixUpmixing": False,
+            "CavernizeUpmix": False,
+            "AtmosAwareUpmix": True,
+            "NeuralSpatialUpmixModeIndex": 0,
             "NeuralExecutionBackendIndex": 0,
             "QaMvsepBlockUntilUtcMs": 0,
             "QaMvsepDirtyGuard": False,
@@ -144,7 +144,7 @@ class SimulatedChaosBridge:
         hp = bool(self.settings.get("HeadphoneVirtualizer", False))
         xtc = bool(self.settings.get("TransauralXtcEnabled", False))
         ism = bool(self.settings.get("IsmRoomEnabled", False))
-        upmix = bool(self.settings.get("SpatialUpmixEnabled", False))
+        upmix = bool(self.settings.get("MatrixUpmixing", False))
         atmos_file = self.loaded_file.lower().endswith(".m4a")
         qa_active = self._is_qa_block_active()
         backend_idx = int(self.settings.get("NeuralExecutionBackendIndex", 0) or 0)
@@ -277,14 +277,14 @@ def build_deterministic_chaos_plan(
         "HeadphoneVirtualizer",
         "TransauralXtcEnabled",
         "IsmRoomEnabled",
-        "SpatialUpmixEnabled",
-        "CavernizeUpmixEnabled",
-        "AtmosAwareEnabled",
-        "NeuralSpatialUpmixEnabled",
+        "MatrixUpmixing",
+        "CavernizeUpmix",
+        "AtmosAwareUpmix",
+        "NeuralSpatialUpmixModeIndex",
     ]
     plan: list[tuple[str, str, dict[str, Any]]] = []
-    # Step 0: always start by loading FLAC deterministically
-    plan.append(("open_demo_flac", "open_file", {"path": flac_path}))
+    # Step 0: always start by loading FLAC deterministically with autoPlay=True so RT blocks render
+    plan.append(("open_demo_flac", "open_file", {"path": flac_path, "autoPlay": True}))
     for idx in range(1, max(2, steps)):
         roll = rng.random()
         if idx == 3 or (idx % 9 == 0):
@@ -294,7 +294,7 @@ def build_deterministic_chaos_plan(
             plan.append(("mvsep_revert_offline", "settings_set", {"key": "NeuralExecutionBackendIndex", "value": 0}))
         elif roll < 0.22:
             target = tracks[rng.randrange(len(tracks))]
-            plan.append(("open_demo_track", "open_file", {"path": target}))
+            plan.append(("open_demo_track", "open_file", {"path": target, "autoPlay": True}))
         elif roll < 0.44:
             tab = rng.choice([0, 1, 2])
             plan.append(("hostile_tab_switch", "tab_switch", {"index": tab}))
@@ -302,12 +302,14 @@ def build_deterministic_chaos_plan(
             action = rng.choice(["play", "pause", "seek"])
             args: dict[str, Any] = {"action": action}
             if action == "seek":
-                args["ratio"] = round(rng.uniform(0.05, 0.90), 3)
+                args["value"] = round(rng.uniform(5.0, 90.0), 1)
             plan.append(("hostile_playback", "playback_control", args))
         else:
             # Hostile mutual-exclusion combo toggle storm (2 keys at once)
             k1, k2 = rng.sample(toggle_keys, 2)
-            vals = {k1: rng.choice([True, False]), k2: rng.choice([True, False])}
+            vals: dict[str, Any] = {}
+            for k in (k1, k2):
+                vals[k] = rng.choice([0, 1, 2]) if k == "NeuralSpatialUpmixModeIndex" else rng.choice([True, False])
             plan.append(("hostile_toggle_storm", "settings_set", {"values": vals}))
     return plan
 
@@ -421,11 +423,20 @@ def run_chaos_simulation(
         if tel_resp.get("ok") and isinstance(tel_resp.get("json"), dict):
             last_telemetry = dict(tel_resp["json"])
     finally:
-        # W59-REBOOT-02: Revert backend to 0 (Offline) FIRST, restore baseline, THEN disarm QA lease
+        # W59-REBOOT-02: Revert backend to 0 (Offline) FIRST, restore Chaos-mutated baseline keys, THEN disarm QA lease
+        chaos_mutable_keys = {
+            "HeadphoneVirtualizer",
+            "TransauralXtcEnabled",
+            "IsmRoomEnabled",
+            "MatrixUpmixing",
+            "CavernizeUpmix",
+            "AtmosAwareUpmix",
+            "NeuralSpatialUpmixModeIndex",
+        }
         restore_vals = {
             k: v
             for k, v in baseline_settings.items()
-            if k not in ("QaMvsepBlockUntilUtcMs", "QaMvsepDirtyGuard", "NeuralExecutionBackendIndex")
+            if k in chaos_mutable_keys
         }
         bridge.cmd("settings_set", {"key": "NeuralExecutionBackendIndex", "value": 0}, tier=1)
         if restore_vals:
@@ -436,6 +447,8 @@ def run_chaos_simulation(
                 "killId": "W59-REBOOT-02",
                 "message": f"Failed to cleanly disarm QA MVSEP lease: {disarm_res.get('error')}",
             })
+        elif baseline_settings.get("NeuralExecutionBackendIndex") not in (None, 0):
+            bridge.cmd("settings_set", {"key": "NeuralExecutionBackendIndex", "value": baseline_settings["NeuralExecutionBackendIndex"]}, tier=1)
 
     combined_tel = dict(last_telemetry)
     combined_tel["soakBaseline"] = soak_base
@@ -465,15 +478,57 @@ def _create_live_omni_bridge() -> ChaosBridgeProtocol:
     agent_dir = Path(__file__).resolve().parent
     if str(agent_dir) not in sys.path:
         sys.path.insert(0, str(agent_dir))
+    import bridge_auth as bauth  # type: ignore
     import omni_agent_client as oac  # type: ignore
 
-    client = oac.OmniAgentClient.from_env()
+    conn = bauth.resolve_connection()
+    relay = conn["relayUrl"]
+    secret = conn["pairSecret"]
+    admin = conn["adminKey"]
+    if not relay or not secret:
+        raise RuntimeError("Missing relayUrl/pairSecret for live Chaos run. Configure bridge secrets or run `omni_agent.py connect`.")
+    cav_chan = oac.pick_cavernize_channel(relay, secret, "auto", admin)
 
     class _OmniTier1Adapter:
         def cmd(self, name: str, args: dict[str, Any] | None = None, tier: int = 1, timeout_sec: int = 30) -> dict[str, Any]:
             if name not in ALLOWED_CHAOS_COMMANDS:
                 return {"ok": False, "error": f"Disallowed command: {name}", "json": None}
-            return client.cavernize_cmd(name, args or {}, tier=min(1, tier), timeout_sec=timeout_sec)
+            payload = oac.build_cavernize_cmd_payload(name, args or {}, tier=min(1, tier), timeout_sec=timeout_sec)
+            t0 = time.monotonic()
+            try:
+                res = oac.send_agent_command(
+                    relay,
+                    secret,
+                    "cavernize_cmd",
+                    payload,
+                    channel=cav_chan,
+                    admin_key=admin,
+                    timeout_sec=max(45, timeout_sec + 15),
+                )
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "subCmd": name,
+                    "elapsedMs": int((time.monotonic() - t0) * 1000),
+                    "body": "",
+                    "json": None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            body = str(res.get("body") or "")
+            parsed = None
+            if body.strip().startswith(("{", "[")):
+                try:
+                    parsed = json.loads(body)
+                except Exception:
+                    parsed = None
+            return {
+                "ok": bool(res.get("ok")),
+                "subCmd": name,
+                "elapsedMs": int(res.get("elapsedMs") or ((time.monotonic() - t0) * 1000)),
+                "body": body,
+                "json": parsed,
+                "error": str(res.get("error") or ""),
+            }
 
     return _OmniTier1Adapter()
 
