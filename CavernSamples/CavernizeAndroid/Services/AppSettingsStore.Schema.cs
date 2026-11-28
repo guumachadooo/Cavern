@@ -46,8 +46,8 @@ public sealed class SettingDescriptor {
 }
 
 public sealed partial class AppSettingsStore {
-    /// <summary>Deterministic SHA-256 hash over all 224 canonical setting descriptors.</summary>
-    public const string SettingsSchemaHash = "ec12538ef08c89b3d1a89ecd0d977832545e010667dbf82f7a6861a5d0e8c5f5";
+    /// <summary>Deterministic SHA-256 hash over all 227 canonical setting descriptors.</summary>
+    public const string SettingsSchemaHash = "3bbe5b4fa00c821afd1b982d4e04a54651e588fd059b432517f6ff6fb0f41aec";
 
     /// <summary>Canonical typed descriptors for all public <see cref="AppSettingsStore"/> properties.</summary>
     public static readonly SettingDescriptor[] SchemaDescriptors = [
@@ -117,6 +117,7 @@ public sealed partial class AppSettingsStore {
         new("InstalledFFmpegVersion", "ffmpegVer", SettingValueKind.String, "\"\"", false, true, static s => s.InstalledFFmpegVersion = ""),
         new("InstalledOnnxRuntimeVersion", "onnxRuntimeVer", SettingValueKind.String, "\"\"", false, true, static s => s.InstalledOnnxRuntimeVersion = ""),
         new("InstalledTruehddVersion", "truehddVer", SettingValueKind.String, "\"\"", false, true, static s => s.InstalledTruehddVersion = ""),
+        new("IsQaMvsepBlockActive", "", SettingValueKind.ReadOnly, "(read-only)", false, false, null),
         new("IsmReflectionLevel", "ismReflectionLevel", SettingValueKind.Float, "1.0f", false, true, static s => s.IsmReflectionLevel = 1.0f),
         new("IsmReflectionOrder", "ismReflectionOrder", SettingValueKind.Int, "2", false, true, static s => s.IsmReflectionOrder = 2),
         new("IsmRoomEnabled", "ismRoomEnabled", SettingValueKind.Bool, "false", false, true, static s => s.IsmRoomEnabled = false),
@@ -210,6 +211,8 @@ public sealed partial class AppSettingsStore {
         new("ProAudioMicSource", "proAudioMicSource", SettingValueKind.Int, "(int)Cavernize.Logic.Spatial.ProAudioMicSource.PhoneMic", false, true, static s => s.ProAudioMicSource = (int)Cavernize.Logic.Spatial.ProAudioMicSource.PhoneMic),
         new("ProAudioPreferredPathIndex", "proAudioPathIdx", SettingValueKind.Int, "(int)Cavernize.Logic.Spatial.ProAudioEnginePath.Auto", false, true, static s => s.ProAudioPreferredPathIndex = (int)Cavernize.Logic.Spatial.ProAudioEnginePath.Auto),
         new("PropagationDelay6DoFEnabled", "propDelay6DoF", SettingValueKind.Bool, "true", false, true, static s => s.PropagationDelay6DoFEnabled = true),
+        new("QaMvsepBlockUntilUtcMs", "qaMvsepBlockUntilUtcMs", SettingValueKind.Long, "0L", false, true, static s => s.QaMvsepBlockUntilUtcMs = 0L),
+        new("QaMvsepDirtyGuard", "qaMvsepDirtyGuard", SettingValueKind.Bool, "false", false, true, static s => s.QaMvsepDirtyGuard = false),
         new("QualityGrading", "qualityGrading", SettingValueKind.Bool, "true", false, true, static s => s.QualityGrading = true),
         new("QuickEqBandsJson", "quickEqBandsJson", SettingValueKind.String, "\"\"", false, true, static s => s.QuickEqBandsJson = ""),
         new("QuickEqEnabled", "quickEqEnabled", SettingValueKind.Bool, "false", false, true, static s => s.QuickEqEnabled = false),

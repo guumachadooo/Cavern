@@ -179,6 +179,7 @@
         ".agents/agent/bridge_auth.py",
         ".agents/agent/local_capabilities.py",
         ".agents/agent/cavern_bug_hunter.py",
+        ".agents/agent/chaos_user_simulator.py",
         ".agents/scripts/omni_agent.py",
         ".agents/bridge_profile.json"
       ],
@@ -319,6 +320,8 @@
         ".agents/scripts/co_evolve.py",
         ".agents/scripts/run_w46_unit_tests.py",
         ".agents/scripts/run_audio_ground_truth.py",
+        ".agents/scripts/headroom_gate.py",
+        ".agents/scripts/scarlett_loopback_delta.py",
         ".agents/scripts/file_budget_guard.py",
         ".agents/scripts/error_learner.py",
         ".agents/scripts/fetch_live_diagnostics.py"

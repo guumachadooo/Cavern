@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using Android.Content;
 using Android.Media;
 using Android.OS;
@@ -928,5 +930,205 @@ public sealed partial class AndroidAudioOutput {
         audioTrackFramesWritten = 0;
         legacyTrackFlushRequested = false;
         UpdateLiveOutputLatencySeconds(0.0);
+    }
+
+    // ==================== W60.1 ZERO-ALLOC 4-SITE RT AUDIO HEADROOM TELEMETRY ====================
+    const int RtHeadroomRingCapacity = 256;
+    readonly object rtMetricsLock = new();
+    readonly double[] rtBlockMsRing = new double[RtHeadroomRingCapacity];
+    readonly double[] rtCpuPctRing = new double[RtHeadroomRingCapacity];
+    readonly long[] rtSiteBlockCounts = new long[4]; // 0=LegacyPreFill, 1=LegacySteady, 2=NativeDuplexPump, 3=NativePreFill
+    readonly double[] rtSiteMaxCpuPct = new double[4];
+    int rtRingWriteIdx;
+    int rtRingCount;
+    long rtTotalRenderedBlocks;
+    long rtTotalRenderedFrames;
+    long rtZeroFrameStarveCount;
+    long rtGcGen0DuringRender;
+    long rtGcGen1DuringRender;
+    long rtGcGen2DuringRender;
+    double rtMaxBlockMs;
+    double rtMaxCpuPct;
+    double rtRenderLockContentionMaxMs;
+    double rtRenderLockContentionTotalMs;
+
+    /// <summary>
+    /// Zero-allocation RT block timing wrapper across all 4 <see cref="RealtimePlayerEngine.RenderNextInterleavedBlock"/> sites.
+    /// Computes exact per-block CPU load from <c>renderedFrames / sampleRate</c> (never dividing by <c>BufferFrames</c>)
+    /// and counts decoder starvation (<c>zeroFrameStarveCount</c>), contention stalls, and RT GC pauses.
+    /// </summary>
+    int RenderBlockInstrumented(int requestedFrames, int siteIndex) {
+        int gc0Before = GC.CollectionCount(0);
+        int gc1Before = GC.CollectionCount(1);
+        int gc2Before = GC.CollectionCount(2);
+        long t0 = Stopwatch.GetTimestamp();
+        int rendered = engine.RenderNextInterleavedBlock(floatRenderBuffer, requestedFrames);
+        long t1 = Stopwatch.GetTimestamp();
+        double elapsedMs = (t1 - t0) * 1000.0 / Stopwatch.Frequency;
+        if (!double.IsFinite(elapsedMs) || elapsedMs < 0.0) {
+            elapsedMs = 0.0;
+        }
+        int dGc0 = Math.Max(0, GC.CollectionCount(0) - gc0Before);
+        int dGc1 = Math.Max(0, GC.CollectionCount(1) - gc1Before);
+        int dGc2 = Math.Max(0, GC.CollectionCount(2) - gc2Before);
+
+        bool activeStream = engine.IsPlaying || engine.IsLiveMonitoringOrCalibrating;
+        if (rendered <= 0) {
+            if (activeStream) {
+                lock (rtMetricsLock) {
+                    rtZeroFrameStarveCount++;
+                    if (elapsedMs > 0.25) {
+                        rtRenderLockContentionTotalMs += elapsedMs;
+                        if (elapsedMs > rtRenderLockContentionMaxMs) {
+                            rtRenderLockContentionMaxMs = elapsedMs;
+                        }
+                    }
+                    rtGcGen0DuringRender += dGc0;
+                    rtGcGen1DuringRender += dGc1;
+                    rtGcGen2DuringRender += dGc2;
+                }
+            }
+            return rendered;
+        }
+
+        int sr = activeSampleRate >= 44100 ? activeSampleRate : Math.Max(44100, engine.OutputSampleRate);
+        double blockBudgetMs = (rendered * 1000.0) / sr;
+        double cpuPct = blockBudgetMs > 0.001 ? Math.Min(1000.0, (elapsedMs / blockBudgetMs) * 100.0) : 0.0;
+        double contentionMs = elapsedMs > (blockBudgetMs * 0.5) ? (elapsedMs - blockBudgetMs * 0.5) : 0.0;
+        int safeSite = Math.Clamp(siteIndex, 0, 3);
+
+        lock (rtMetricsLock) {
+            rtBlockMsRing[rtRingWriteIdx] = elapsedMs;
+            rtCpuPctRing[rtRingWriteIdx] = cpuPct;
+            rtRingWriteIdx = (rtRingWriteIdx + 1) & (RtHeadroomRingCapacity - 1);
+            if (rtRingCount < RtHeadroomRingCapacity) {
+                rtRingCount++;
+            }
+            rtTotalRenderedBlocks++;
+            rtTotalRenderedFrames += rendered;
+            rtSiteBlockCounts[safeSite]++;
+            if (cpuPct > rtSiteMaxCpuPct[safeSite]) {
+                rtSiteMaxCpuPct[safeSite] = cpuPct;
+            }
+            if (elapsedMs > rtMaxBlockMs) {
+                rtMaxBlockMs = elapsedMs;
+            }
+            if (cpuPct > rtMaxCpuPct) {
+                rtMaxCpuPct = cpuPct;
+            }
+            if (contentionMs > 0.0) {
+                rtRenderLockContentionTotalMs += contentionMs;
+                if (contentionMs > rtRenderLockContentionMaxMs) {
+                    rtRenderLockContentionMaxMs = contentionMs;
+                }
+            }
+            rtGcGen0DuringRender += dGc0;
+            rtGcGen1DuringRender += dGc1;
+            rtGcGen2DuringRender += dGc2;
+        }
+        return rendered;
+    }
+
+    /// <summary>Resets the rolling 4-site RT audio headroom measurement window.</summary>
+    public void ResetRtAudioHeadroomWindow() {
+        lock (rtMetricsLock) {
+            Array.Clear(rtBlockMsRing, 0, rtBlockMsRing.Length);
+            Array.Clear(rtCpuPctRing, 0, rtCpuPctRing.Length);
+            Array.Clear(rtSiteBlockCounts, 0, rtSiteBlockCounts.Length);
+            Array.Clear(rtSiteMaxCpuPct, 0, rtSiteMaxCpuPct.Length);
+            rtRingWriteIdx = 0;
+            rtRingCount = 0;
+            rtTotalRenderedBlocks = 0;
+            rtTotalRenderedFrames = 0;
+            rtZeroFrameStarveCount = 0;
+            rtGcGen0DuringRender = 0;
+            rtGcGen1DuringRender = 0;
+            rtGcGen2DuringRender = 0;
+            rtMaxBlockMs = 0.0;
+            rtMaxCpuPct = 0.0;
+            rtRenderLockContentionMaxMs = 0.0;
+            rtRenderLockContentionTotalMs = 0.0;
+        }
+    }
+
+    /// <summary>Builds a point-in-time snapshot of true per-block RT audio CPU%, starvation, contention, and RT GC counts.</summary>
+    public object BuildRtAudioHeadroomSnapshot() {
+        double[] blockCopy;
+        double[] cpuCopy;
+        long[] siteCounts = new long[4];
+        double[] siteMaxCpu = new double[4];
+        long totalBlocks;
+        long totalFrames;
+        long starveCount;
+        long gc0;
+        long gc1;
+        long gc2;
+        double maxBlockMs;
+        double maxCpuPct;
+        double contentionMaxMs;
+        double contentionTotalMs;
+
+        lock (rtMetricsLock) {
+            blockCopy = new double[rtRingCount];
+            cpuCopy = new double[rtRingCount];
+            Array.Copy(rtBlockMsRing, blockCopy, rtRingCount);
+            Array.Copy(rtCpuPctRing, cpuCopy, rtRingCount);
+            Array.Copy(rtSiteBlockCounts, siteCounts, 4);
+            Array.Copy(rtSiteMaxCpuPct, siteMaxCpu, 4);
+            totalBlocks = rtTotalRenderedBlocks;
+            totalFrames = rtTotalRenderedFrames;
+            starveCount = rtZeroFrameStarveCount;
+            gc0 = rtGcGen0DuringRender;
+            gc1 = rtGcGen1DuringRender;
+            gc2 = rtGcGen2DuringRender;
+            maxBlockMs = rtMaxBlockMs;
+            maxCpuPct = rtMaxCpuPct;
+            contentionMaxMs = rtRenderLockContentionMaxMs;
+            contentionTotalMs = rtRenderLockContentionTotalMs;
+        }
+
+        Array.Sort(blockCopy);
+        Array.Sort(cpuCopy);
+        static double Pct(double[] arr, double q) {
+            if (arr.Length == 0) {
+                return 0.0;
+            }
+            int idx = (int)Math.Floor((arr.Length - 1) * Math.Clamp(q, 0.0, 1.0));
+            return arr[Math.Clamp(idx, 0, arr.Length - 1)];
+        }
+
+        double blockP50 = Pct(blockCopy, 0.50);
+        double blockP95 = Pct(blockCopy, 0.95);
+        double cpuP50 = Pct(cpuCopy, 0.50);
+        double cpuP95 = Pct(cpuCopy, 0.95);
+        long rtGcTotal = gc0 + gc1 + gc2;
+
+        return new {
+            sampleRate = Math.Max(44100, activeSampleRate),
+            isPlaying = engine.IsPlaying,
+            ringCount = blockCopy.Length,
+            ringCapacity = RtHeadroomRingCapacity,
+            totalRenderedBlocks = totalBlocks,
+            totalRenderedFrames = totalFrames,
+            blockP50Ms = Math.Round(blockP50, 3),
+            blockP95Ms = Math.Round(blockP95, 3),
+            blockMaxMs = Math.Round(maxBlockMs, 3),
+            cpuP50Pct = Math.Round(cpuP50, 2),
+            cpuP95Pct = Math.Round(cpuP95, 2),
+            cpuMaxPct = Math.Round(maxCpuPct, 2),
+            zeroFrameStarveCount = starveCount,
+            renderLockContentionMs = Math.Round(contentionMaxMs, 3),
+            renderLockContentionTotalMs = Math.Round(contentionTotalMs, 3),
+            rtGcCount = rtGcTotal,
+            rtGcGen0 = gc0,
+            rtGcGen1 = gc1,
+            rtGcGen2 = gc2,
+            sites = new {
+                legacyPreFill = new { blocks = siteCounts[0], maxCpuPct = Math.Round(siteMaxCpu[0], 2) },
+                legacySteady = new { blocks = siteCounts[1], maxCpuPct = Math.Round(siteMaxCpu[1], 2) },
+                nativeDuplexPump = new { blocks = siteCounts[2], maxCpuPct = Math.Round(siteMaxCpu[2], 2) },
+                nativePreFill = new { blocks = siteCounts[3], maxCpuPct = Math.Round(siteMaxCpu[3], 2) }
+            }
+        };
     }
 }

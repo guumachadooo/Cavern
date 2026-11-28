@@ -734,7 +734,58 @@ public sealed partial class AppSettingsStore {
 
     public int NeuralExecutionBackendIndex {
         get => Math.Clamp(prefs.GetInt("neuralExecBackendIdx", (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.OnDevice), 0, 2);
-        set => Edit().PutInt("neuralExecBackendIdx", Math.Clamp(value, 0, 2)).Apply();
+        set {
+            int clamped = Math.Clamp(value, 0, 2);
+            if (clamped == (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.MvsepCloud && IsQaMvsepBlockActive) {
+                Edit().PutInt("neuralExecBackendIdx", clamped).PutBoolean("qaMvsepDirtyGuard", true).Commit();
+            } else {
+                Edit().PutInt("neuralExecBackendIdx", clamped).Apply();
+            }
+        }
+    }
+
+    public long QaMvsepBlockUntilUtcMs {
+        get => prefs.GetLong("qaMvsepBlockUntilUtcMs", 0L);
+        set {
+            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (value > nowMs) {
+                Cavernize.Logic.Spatial.MvsepCloudClient.ArmQaCloudBlockUntil(value);
+                Edit().PutLong("qaMvsepBlockUntilUtcMs", value).PutBoolean("qaMvsepDirtyGuard", true).Commit();
+            } else {
+                if (NeuralExecutionBackendIndex == (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.MvsepCloud) {
+                    Edit().PutInt("neuralExecBackendIdx", (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.OnDevice).Commit();
+                }
+                Cavernize.Logic.Spatial.MvsepCloudClient.ArmQaCloudBlockUntil(0L);
+                Edit().PutLong("qaMvsepBlockUntilUtcMs", 0L).PutBoolean("qaMvsepDirtyGuard", false).Commit();
+            }
+        }
+    }
+
+    public bool QaMvsepDirtyGuard {
+        get => prefs.GetBoolean("qaMvsepDirtyGuard", false);
+        set => Edit().PutBoolean("qaMvsepDirtyGuard", value).Commit();
+    }
+
+    public bool IsQaMvsepBlockActive =>
+        QaMvsepBlockUntilUtcMs > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() ||
+        Cavernize.Logic.Spatial.MvsepCloudClient.IsQaCloudBlockActive;
+
+    public void EnforceQaMvsepBootLeaseGuard() {
+        long leaseUtcMs = prefs.GetLong("qaMvsepBlockUntilUtcMs", 0L);
+        long nowUtcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        int backendIdx = NeuralExecutionBackendIndex;
+        bool dirty = prefs.GetBoolean("qaMvsepDirtyGuard", false);
+        Cavernize.Logic.Spatial.MvsepQaBootGuardResult res =
+            Cavernize.Logic.Spatial.MvsepCloudClient.EvaluateBootLeaseGuard(leaseUtcMs, nowUtcMs, backendIdx, dirty);
+        if (res.ShouldBlockCloud) {
+            Cavernize.Logic.Spatial.MvsepCloudClient.ArmQaCloudBlockUntil(leaseUtcMs);
+        }
+        if (res.BackendRevertedToOffline) {
+            Edit().PutInt("neuralExecBackendIdx", res.SafeBackendIndex).Commit();
+        }
+        if (res.ShouldClearDirtyGuard) {
+            Edit().PutLong("qaMvsepBlockUntilUtcMs", 0L).PutBoolean("qaMvsepDirtyGuard", false).Commit();
+        }
     }
 
     public string MvsepApiToken {
@@ -1767,6 +1818,7 @@ public sealed partial class AppSettingsStore {
             LanguageSettings.CultureOverride = LanguageCode;
         }
         MigrateLegacyAutoEqTargetDefault();
+        EnforceQaMvsepBootLeaseGuard();
     }
 
     /// <summary>
@@ -1848,5 +1900,6 @@ public sealed partial class AppSettingsStore {
         Cavern.Format.Common.CavernFormatGlobal.Unsafe = Unsafe;
         RenderingSettings.KeepTempFiles = KeepTempFiles;
         AndroidRuntimeTelemetry.SetComputeBudgetTier(AiComputeBudgetTier);
+        EnforceQaMvsepBootLeaseGuard();
     }
 }

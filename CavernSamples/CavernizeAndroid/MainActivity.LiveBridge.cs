@@ -111,6 +111,78 @@ public partial class MainActivity : ILiveBridgeAppHost {
             activeTab: tab);
     }
 
+    Task<string> ILiveBridgeAppHost.GetMutualExclusionSnapshotJsonAsync() => RunOnUiThreadWithTimeoutAsync(() => {
+        bool isSpeaker = IsActiveOutputSpeakerRoute();
+        bool isAtmos = IsActiveTrackMultichannelOrAtmos();
+        bool xtcEnabled = store?.TransauralXtcEnabled ?? false;
+        bool xtcActive = playerEngine?.TransauralXtcDiagnostics.IsActive ?? false;
+        bool xtcAutoBypassHp = store?.TransauralXtcAutoBypassHeadphones ?? true;
+        bool shouldBypassAmbience = ShouldAutoBypassRoomAmbienceForSpeakers();
+        bool storeIsm = store?.IsmRoomEnabled ?? false;
+        bool arbitratedIsm = BuildArbitratedExternalizationConfig().IsmRoomEnabled;
+        bool sceneBrir = playerEngine?.SceneHub?.IsMeasuredBrirActive ?? false;
+        bool hideChannelUpmix = ShouldHideChannelUpmixSelectors();
+        Cavernize.Logic.Spatial.NeuralAudioConfig nCfg = store?.BuildNeuralAudioConfig();
+        bool qaBlock = Cavernize.Logic.Spatial.MvsepCloudClient.IsQaCloudBlockActive || (store?.IsQaMvsepBlockActive ?? false);
+        bool canUseCloud = CanUseMvsepCloud(nCfg);
+        long blockedReqs = Cavernize.Logic.Spatial.MvsepCloudClient.QaBlockedRequestCount;
+        int backendIdx = store?.NeuralExecutionBackendIndex ?? 0;
+
+        List<string> violations = [];
+        if (isSpeaker && arbitratedIsm) {
+            violations.Add("speaker_ambience_not_bypassed");
+        }
+        if (isSpeaker && sceneBrir) {
+            violations.Add("speaker_brir_not_bypassed");
+        }
+        if (!isSpeaker && xtcActive && xtcAutoBypassHp) {
+            violations.Add("xtc_active_on_headphones");
+        }
+        if (qaBlock && canUseCloud) {
+            violations.Add("mvsep_cloud_unblocked_under_qa");
+        }
+        if (isAtmos && !hideChannelUpmix) {
+            violations.Add("atmos_channel_upmix_not_hidden");
+        }
+
+        return JsonSerializer.Serialize(new {
+            activeTab,
+            activeDialogCount = OneUiModalDialog.GetActiveDialogs().Count,
+            isOperationRunning,
+            isPreparingTrueHD,
+            isNeuralPrepRunning,
+            loadedFile = LoadedFile?.Path ?? "",
+            selectedCodec = selectedTrack?.Codec.ToString() ?? "",
+            isTrackMultichannelOrAtmos = isAtmos,
+            isPlaying = playerEngine?.IsPlaying ?? false,
+            isSpeakerRoute = isSpeaker,
+            isHeadphoneRoute = !isSpeaker,
+            headphoneVirtualizer = store?.HeadphoneVirtualizer ?? false,
+            engineHeadphoneVirtualizer = playerEngine?.HeadphoneVirtualizer ?? false,
+            transauralXtcEnabled = xtcEnabled,
+            transauralXtcActive = xtcActive,
+            transauralXtcAutoBypassHeadphones = xtcAutoBypassHp,
+            isSpeakerXtcOutputActive = IsSpeakerXtcOutputActive(),
+            shouldAutoBypassRoomAmbience = shouldBypassAmbience,
+            storeIsmRoomEnabled = storeIsm,
+            arbitratedIsmRoomEnabled = arbitratedIsm,
+            runtimeBrirBypassedForSpeaker,
+            sceneHubMeasuredBrirActive = sceneBrir,
+            shouldHideChannelUpmix = hideChannelUpmix,
+            classicMatrixUpmixing = store?.MatrixUpmixing ?? false,
+            classicCavernizeUpmix = store?.CavernizeUpmix ?? false,
+            atmosAwareUpmix = store?.AtmosAwareUpmix ?? false,
+            neuralSpatialUpmixModeIndex = store?.NeuralSpatialUpmixModeIndex ?? 0,
+            neuralExecutionBackendIndex = backendIdx,
+            neuralOrchestrationModeIndex = store?.NeuralOrchestrationModeIndex ?? 0,
+            qaMvsepBlockActive = qaBlock,
+            qaMvsepBlockUntilUtcMs = store?.QaMvsepBlockUntilUtcMs ?? 0L,
+            qaMvsepBlockedRequests = blockedReqs,
+            canUseMvsepCloud = canUseCloud,
+            invariantViolations = violations
+        }, new JsonSerializerOptions { WriteIndented = true });
+    });
+
     (int totalViews, int clickableViews) CountInspectableViews() {
         int total = 0;
         int clickable = 0;
@@ -769,10 +841,25 @@ public partial class MainActivity : ILiveBridgeAppHost {
         if (!exists) {
             return (false, $"File not found: '{path}'");
         }
-        return await RunOnUiThreadWithTimeoutAsync(() => {
-            OpenLocalPathWithFallbackAsync(path, switchToTab: switchToTab, autoPlay: autoPlay, bypassBusyGuard: true);
-            return (true, $"Opening '{System.IO.Path.GetFileName(path)}' (autoPlay={autoPlay}).");
-        }).ConfigureAwait(false);
+        Task<(bool ok, string message)> openTask = await RunOnUiThreadWithTimeoutAsync(
+            () => OpenLocalPathWithFallbackTaskAsync(path, switchToTab: switchToTab, autoPlay: autoPlay, bypassBusyGuard: true),
+            timeoutMs: 6000).ConfigureAwait(false);
+        (bool ok, string msg) = await WaitWithTimeoutAsync(openTask, timeoutMs: 25_000).ConfigureAwait(false);
+        if (!ok) {
+            return (false, msg);
+        }
+        // Barrier: wait until off-UI track bind & metadata settlement finish (isOperationRunning==false && loadedFile synced)
+        Stopwatch settleSw = Stopwatch.StartNew();
+        while (settleSw.ElapsedMilliseconds < 8000 && !uiDestroyed) {
+            (bool settled, string loadedPath) = await RunOnUiThreadWithTimeoutAsync(() =>
+                (!isOperationRunning && !isPreparingTrueHD && LoadedFile != null, LoadedFile?.Path ?? ""),
+                timeoutMs: 3000).ConfigureAwait(false);
+            if (settled && !string.IsNullOrEmpty(loadedPath)) {
+                return (true, $"{msg} [barrier=settled, loaded='{System.IO.Path.GetFileName(loadedPath)}']");
+            }
+            await Task.Delay(50).ConfigureAwait(false);
+        }
+        return (true, $"{msg} [barrier=timeout_soft]");
     }
 
     Task<(bool ok, string message)> ILiveBridgeAppHost.ExecuteUiActionAsync(string action, string message) => RunOnUiThreadWithTimeoutAsync(() => {

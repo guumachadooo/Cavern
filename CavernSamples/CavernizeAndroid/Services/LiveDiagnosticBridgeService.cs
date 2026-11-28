@@ -52,6 +52,7 @@ public interface ILiveBridgeAppHost {
     Task ApplySettingsChangedAsync();
     Task<string> GetRuntimeTelemetryJsonAsync();
     Task<string> GetSoakSnapshotJsonAsync(bool forceGc = false);
+    Task<string> GetMutualExclusionSnapshotJsonAsync();
 }
 
 /// <summary>
@@ -186,7 +187,8 @@ public static partial class LiveDiagnosticBridgeService {
         ShellExec = 51,
         HotProbeStatus = 52,
         HotExec = 53,
-        Pipeline = 54
+        Pipeline = 54,
+        MutexSnapshot = 55
     }
 
     /// <summary>Canonical MainActivity bottom-navigation tab names synchronized with <c>.agents/federation.json</c>.</summary>
@@ -224,6 +226,7 @@ public static partial class LiveDiagnosticBridgeService {
         new(BridgeCommandOpcode.RuntimeTelemetry, "runtime_telemetry", 0, "Inspect live 120 Hz FrameMetrics, StrictMode violations, ApplicationExitInfo, AAudio/AudioTrack XRuns & thermal QoS", "{resetFrameMetrics?:bool, clearStrictMode?:bool, maxExitReasons?:1..10}"),
         new(BridgeCommandOpcode.SoakSnapshot, "soak_snapshot", 0, "Capture Q3 dirty-state & resource soak snapshot (Total/Native PSS, managed GC, /proc/self/fd, OS threads, View count, dialogs, isOperationRunning)", "{forceGc?:bool}"),
         new(BridgeCommandOpcode.CortexProfiles, "cortex_profiles", 0, "Auto-characterize & export Phase-A Omniscient Cortex ComponentBehaviorProfile registry & conflict governance JSON", "{sampleRate?:16000..192000}"),
+        new(BridgeCommandOpcode.MutexSnapshot, "mutex_snapshot", 0, "Capture atomic UI-thread mutual-exclusion, speaker/XTC/BRIR/upmix/MVSEP QA guard & invariant snapshot", "{}"),
         new(BridgeCommandOpcode.Batch, "batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
 
         // Tier 1: Interactive App Control, QA & Total-App Live Audit

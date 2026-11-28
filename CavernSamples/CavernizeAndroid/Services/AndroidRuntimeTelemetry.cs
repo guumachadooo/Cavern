@@ -435,6 +435,30 @@ public static class AndroidRuntimeTelemetry {
         };
     }
 
+    /// <summary>Returns typed 120 Hz FrameMetrics headroom summary for L12 SelfAudit enforcement (<c>totalFrames &gt;= 15</c>).</summary>
+    public static (long totalFrames, double cpuP95Ms, double totalP95Ms, long frozenFrames, double jank120HzPct) GetFrameMetricsHeadroomSummary() {
+        double[] totalCopy;
+        double[] cpuCopy;
+        long total;
+        long jank120;
+        long frozen;
+        lock (frameLock) {
+            totalCopy = new double[frameCount];
+            cpuCopy = new double[frameCount];
+            Array.Copy(frameTotalMsRing, totalCopy, frameCount);
+            Array.Copy(frameCpuMsRing, cpuCopy, frameCount);
+            total = totalFramesObserved;
+            jank120 = total120HzJankFrames;
+            frozen = totalFrozenFrames;
+        }
+        Array.Sort(totalCopy);
+        Array.Sort(cpuCopy);
+        double cpuP95 = Percentile(cpuCopy, 0.95);
+        double totalP95 = Percentile(totalCopy, 0.95);
+        double jank120Pct = total > 0 ? (jank120 * 100.0 / total) : 0.0;
+        return (total, Math.Round(cpuP95, 2), Math.Round(totalP95, 2), frozen, Math.Round(jank120Pct, 2));
+    }
+
     /// <summary>
     /// Enables or disables the opt-in Q2 <see cref="StrictMode"/> main-thread/VM violation detector.
     /// Must be invoked on the Android main UI thread so <see cref="StrictMode.ThreadPolicy"/> binds to the UI looper.
@@ -669,7 +693,7 @@ public static class AndroidRuntimeTelemetry {
         return false;
     }
 
-    /// <summary>Builds the unified AAudio + AudioTrack XRun telemetry payload.</summary>
+    /// <summary>Builds the unified AAudio + AudioTrack XRun and native RT callback timing telemetry payload.</summary>
     public static object BuildAudioXRunObject(AndroidAudioOutput audioOutput) {
         int aaudioOutXRuns = 0;
         int aaudioInXRuns = 0;
@@ -677,6 +701,10 @@ public static class AndroidRuntimeTelemetry {
         string activePath = "AudioTrack";
         int bufferFrames = 0;
         int nativeSr = 0;
+        float callbackP95Us = 0f;
+        float callbackMaxUs = 0f;
+        float callbackCpuP95Pct = 0f;
+        bool holdCaptureNoDiscard = false;
         try {
             if (NativeProAudioBridge.TryGetStatus(out NativeProAudioStatus st)) {
                 aaudioOutXRuns = st.OutputXRuns;
@@ -685,6 +713,10 @@ public static class AndroidRuntimeTelemetry {
                 activePath = st.ActiveBackend == 1 ? "AAudio" : (st.ActiveBackend == 2 ? "USB-Direct" : "AudioTrack");
                 bufferFrames = st.BufferFrames;
                 nativeSr = st.SampleRate;
+                callbackP95Us = st.CallbackP95Us;
+                callbackMaxUs = st.CallbackMaxUs;
+                callbackCpuP95Pct = st.CallbackCpuP95Pct;
+                holdCaptureNoDiscard = st.HoldCaptureNoDiscard != 0;
             }
         } catch {
             // Native engine not initialized
@@ -698,7 +730,11 @@ public static class AndroidRuntimeTelemetry {
             aaudioOutputXRuns = aaudioOutXRuns,
             aaudioInputXRuns = aaudioInXRuns,
             audioTrackUnderruns,
-            totalOutputUnderruns = aaudioOutXRuns + audioTrackUnderruns
+            totalOutputUnderruns = aaudioOutXRuns + audioTrackUnderruns,
+            nativeCallbackP95Us = Math.Round(callbackP95Us, 1),
+            nativeCallbackMaxUs = Math.Round(callbackMaxUs, 1),
+            nativeCallbackCpuP95Pct = Math.Round(callbackCpuP95Pct, 2),
+            holdCaptureNoDiscard
         };
     }
 
@@ -858,6 +894,18 @@ public static class AndroidRuntimeTelemetry {
             frameMetrics = BuildFrameMetricsObject(),
             strictMode = BuildStrictModeObject(),
             audioXRuns = BuildAudioXRunObject(audioOutput),
+            rtAudioHeadroom = audioOutput?.BuildRtAudioHeadroomSnapshot(),
+            headroomBudgets = new {
+                rtCpuP95LimitPct = 50.0,
+                uiCpuP95LimitMs = 4.16,
+                uiTotalP95LimitMs = 8.33,
+                uiMinFrames = 15,
+                simpleTransitionLimitMs = 25,
+                heavyModalLimitMs = 80,
+                pssIdleLimitMb = 550.0,
+                pssOnnxLimitMb = 1280.0,
+                fdDeltaLimit = 8
+            },
             exitReasonsSupported = OperatingSystem.IsAndroidVersionAtLeast(30),
             exitReasons = ReadHistoricalExitReasons(ctx, maxExitReasons)
         }, new JsonSerializerOptions { WriteIndented = true });

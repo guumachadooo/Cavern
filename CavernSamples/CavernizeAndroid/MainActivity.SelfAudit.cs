@@ -534,6 +534,46 @@ public partial class MainActivity {
                 ElapsedMs = perfSamples.Sum(p => p.FirstFrameMs),
                 Details = detL12
             });
+
+            // W60.1 Strict 50% 120Hz FrameMetrics Headroom Gate (totalFrames >= 15 prevents silent low-sample pass)
+            (long fmTotal, double fmCpuP95, double fmTotalP95, long fmFrozen, double fmJank120Pct) =
+                AndroidRuntimeTelemetry.GetFrameMetricsHeadroomSummary();
+            long maxSimpleMs = perfSamples.Where(p => p.Complexity == "Simple").Select(p => p.FirstFrameMs).DefaultIfEmpty(0).Max();
+            long maxHeavyMs = perfSamples.Where(p => p.Complexity == "Heavy").Select(p => p.FirstFrameMs).DefaultIfEmpty(0).Max();
+            List<string> headroomFaults = [];
+            if (vsyncSampledCount > 0 && fmTotal < 15) {
+                headroomFaults.Add($"FrameMetrics totalFrames={fmTotal} < 15");
+            }
+            if (fmTotal >= 15 && fmCpuP95 > 4.16) {
+                headroomFaults.Add($"cpuP95={fmCpuP95:0.00}ms > 4.16ms");
+            }
+            if (fmTotal >= 15 && fmTotalP95 > 8.33) {
+                headroomFaults.Add($"totalP95={fmTotalP95:0.00}ms > 8.33ms");
+            }
+            if (fmFrozen > 0) {
+                headroomFaults.Add($"frozenFrames={fmFrozen}");
+            }
+            SelfCheckStatus stHeadroom = headroomFaults.Count > 0
+                ? SelfCheckStatus.Fail
+                : ((maxSimpleMs > 25 || maxHeavyMs > 80) ? SelfCheckStatus.Warn : SelfCheckStatus.Pass);
+            string detHeadroom = headroomFaults.Count > 0
+                ? string.Format(
+                    CultureInfo.InvariantCulture,
+                    "50% UI headroom FAIL ({0}) [frames={1}, cpuP95={2:0.00}ms, totalP95={3:0.00}ms, simpleMax={4}ms, heavyMax={5}ms]",
+                    string.Join("; ", headroomFaults), fmTotal, fmCpuP95, fmTotalP95, maxSimpleMs, maxHeavyMs)
+                : string.Format(
+                    CultureInfo.InvariantCulture,
+                    "50% UI headroom {0} (frames={1}, cpuP95={2:0.00}ms<=4.16ms, totalP95={3:0.00}ms<=8.33ms, jank120={4:0.0}%, simpleMax={5}ms, heavyMax={6}ms)",
+                    stHeadroom == SelfCheckStatus.Warn ? "WARN" : "PASS",
+                    fmTotal, fmCpuP95, fmTotalP95, fmJank120Pct, maxSimpleMs, maxHeavyMs);
+            results.Add(new SelfCheckItem {
+                Id = "ui.headroom_50pct",
+                Layer = "L12-PerfJank",
+                Name = "120Hz 50% UI Headroom Gate (totalFrames>=15, cpuP95<=4.16ms)",
+                Status = stHeadroom,
+                ElapsedMs = 0,
+                Details = detHeadroom
+            });
         } finally {
             isRunningUiSelfAudit = false;
             // Guaranteed restore of the user's exact screen state

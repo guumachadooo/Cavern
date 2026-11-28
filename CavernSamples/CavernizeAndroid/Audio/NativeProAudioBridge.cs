@@ -42,6 +42,18 @@ public struct NativeProAudioStatus {
 
     /// <summary>Live asynchronous USB clock drift estimate in parts per million.</summary>
     public float AsyncDriftPpm;
+
+    /// <summary>95th-percentile native RT callback duration in microseconds.</summary>
+    public float CallbackP95Us;
+
+    /// <summary>Max observed native RT callback duration in microseconds.</summary>
+    public float CallbackMaxUs;
+
+    /// <summary>95th-percentile native RT callback CPU load percentage of burst duration.</summary>
+    public float CallbackCpuP95Pct;
+
+    /// <summary>1 when unbroken-duplex capture hold (skipping 8 ms discard_oldest) is armed.</summary>
+    public int HoldCaptureNoDiscard;
 }
 
 /// <summary>
@@ -200,6 +212,33 @@ public static class NativeProAudioBridge {
         return NativeReadCapture(stereoInterleaved, maxFrames);
     }
 
+    /// <summary>
+    /// Arms or disarms unbroken-duplex capture hold so native Path A/B capture reads skip the 8 ms
+    /// <c>cav_rb_discard_oldest</c> trim during multi-second loopback sweep calibrations.
+    /// </summary>
+    public static void SetHoldCaptureNoDiscard(bool enable) {
+        if (!IsAvailable) {
+            return;
+        }
+        try {
+            NativeSetHoldCaptureNoDiscard(enable ? 1 : 0);
+        } catch (EntryPointNotFoundException) {
+            // Graceful no-op on ABI 100 binaries
+        }
+    }
+
+    /// <summary>Returns true when unbroken-duplex capture hold is currently armed in native pro-audio.</summary>
+    public static bool GetHoldCaptureNoDiscard() {
+        if (!IsAvailable) {
+            return false;
+        }
+        try {
+            return NativeGetHoldCaptureNoDiscard() != 0;
+        } catch (EntryPointNotFoundException) {
+            return false;
+        }
+    }
+
     /// <summary>Returns free frames available in the native playback ring buffer.</summary>
     public static int GetPlaybackFreeFrames() {
         if (!IsAvailable) {
@@ -335,6 +374,12 @@ public static class NativeProAudioBridge {
 
     [DllImport(LibraryName, EntryPoint = "cavernize_pa_read_capture", CallingConvention = CallingConvention.Cdecl)]
     static extern int NativeReadCapture([Out] float[] stereoInterleaved, int maxFrames);
+
+    [DllImport(LibraryName, EntryPoint = "cavernize_pa_set_hold_capture_no_discard", CallingConvention = CallingConvention.Cdecl)]
+    static extern void NativeSetHoldCaptureNoDiscard(int enable);
+
+    [DllImport(LibraryName, EntryPoint = "cavernize_pa_get_hold_capture_no_discard", CallingConvention = CallingConvention.Cdecl)]
+    static extern int NativeGetHoldCaptureNoDiscard();
 
     [DllImport(LibraryName, EntryPoint = "cavernize_pa_get_playback_free_frames", CallingConvention = CallingConvention.Cdecl)]
     static extern int NativeGetPlaybackFreeFrames();

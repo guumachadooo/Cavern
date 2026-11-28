@@ -1137,6 +1137,121 @@
           "message": "LastAudioTrackUnderrunCount must return 0 when stream is stopped/idle"
         }
       ]
+    },
+    {
+      "id": "REG-QA3-001-MVSEP-FAILCLOSED-LEASE",
+      "bug_ref": "BP-QA-V3/W59.1",
+      "title": "Guarantee 0 MVSEP HTTP egress under QA/Chaos across LMKD crash/reboot, Test Connection, and atomic mutex_snapshot opcode 55",
+      "domain": "ai-ml",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T61 + PY_T21",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/MvsepCloudClient.cs",
+          "pattern": "class\\s+QaFailClosedHttpHandler\\s*:\\s*DelegatingHandler[\\s\\S]*?TryDisarmQaCloudBlock\\([\\s\\S]*?EvaluateBootLeaseGuard\\(",
+          "message": "MvsepCloudClient must enforce QaFailClosedHttpHandler, TryDisarmQaCloudBlock, and EvaluateBootLeaseGuard"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/AppSettingsStore.cs",
+          "pattern": "QaMvsepBlockUntilUtcMs[\\s\\S]*?QaMvsepDirtyGuard[\\s\\S]*?EnforceQaMvsepBootLeaseGuard\\(",
+          "message": "AppSettingsStore must persist QaMvsepBlockUntilUtcMs/QaMvsepDirtyGuard and enforce EnforceQaMvsepBootLeaseGuard on boot"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.Settings.Neural.cs",
+          "pattern": "IsQaMvsepBlockActive\\s*\\|\\|\\s*(?:Cavernize\\.Logic\\.Spatial\\.)?MvsepCloudClient\\.IsQaCloudBlockActive",
+          "message": "MVSEP Test Connection UI handler must fail-closed with 0 HTTP egress while QA block is active"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/LiveDiagnosticBridgeService.cs",
+          "pattern": "MutexSnapshot\\s*=\\s*55",
+          "message": "LiveDiagnosticBridgeService must expose BridgeCommandOpcode.MutexSnapshot = 55"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.LiveBridge.cs",
+          "pattern": "GetMutualExclusionSnapshotJsonAsync[\\s\\S]*?invariantViolations[\\s\\S]*?OpenLocalPathWithFallbackTaskAsync",
+          "message": "MainActivity.LiveBridge must expose atomic mutex_snapshot and awaitable OpenFileAsync settlement barrier"
+        }
+      ]
+    },
+    {
+      "id": "REG-QA3-002-HEADROOM-50PCT-AND-HOLD-CAPTURE",
+      "bug_ref": "BP-QA-V3/W60.1",
+      "title": "Enforce true 50% headroom RT/UI/6GB-PSS telemetry across all 4 render sites, native callback timer, hold_capture_no_discard, and headroom_gate.py",
+      "domain": "dsp-ui",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:PY_T21 + headroom_gate.py --self-test",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Audio/AndroidAudioOutput.cs",
+          "pattern": "RenderBlockInstrumented\\([^;\\n]*siteIndex:\\s*0\\)[\\s\\S]*?RenderBlockInstrumented\\([^;\\n]*siteIndex:\\s*1\\)[\\s\\S]*?RenderBlockInstrumented\\([^;\\n]*siteIndex:\\s*2\\)[\\s\\S]*?RenderBlockInstrumented\\([^;\\n]*siteIndex:\\s*3\\)",
+          "message": "AndroidAudioOutput must instrument all 4 RenderNextInterleavedBlock call sites via RenderBlockInstrumented"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Native/cavernize_proaudio/cavernize_path_a_aaudio.cpp",
+          "pattern": "hold_capture_no_discard[\\s\\S]*?callback_cpu_p95_pct",
+          "message": "Path A AAudio native backend must support hold_capture_no_discard and callback_cpu_p95_pct"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Native/cavernize_proaudio/cavernize_path_b_libusb.cpp",
+          "pattern": "hold_capture_no_discard[\\s\\S]*?callback_cpu_p95_pct",
+          "message": "Path B libusb native backend must support hold_capture_no_discard and callback_cpu_p95_pct"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.SelfAudit.cs",
+          "pattern": "fmTotal\\s*<\\s*15[\\s\\S]*?4\\.16[\\s\\S]*?ui\\.headroom_50pct",
+          "message": "MainActivity.SelfAudit must enforce ui.headroom_50pct with totalFrames >= 15 and cpuP95 <= 4.16ms"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": ".agents/scripts/headroom_gate.py",
+          "pattern": "def\\s+evaluate_headroom\\([\\s\\S]*?def\\s+run_self_test\\(",
+          "message": "headroom_gate.py must implement evaluate_headroom and fault-injection self-test"
+        }
+      ]
+    },
+    {
+      "id": "REG-QA3-003-CHAOS-AND-SCARLETT-DELTA",
+      "bug_ref": "BP-QA-V3/W59.2-W60.2",
+      "title": "Maintain deterministic Chaos User Simulator (0 MVSEP credits, Tier-0/1 only) and Scarlett Gen4 unbroken-duplex delta harness with cable-fault rejection",
+      "domain": "qa-audio",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "test_bug_hunter.py + scarlett_loopback_delta.py --self-test",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": ".agents/agent/chaos_user_simulator.py",
+          "pattern": "ALLOWED_CHAOS_COMMANDS[\\s\\S]*?QaMvsepBlockUntilUtcMs[\\s\\S]*?def\\s+run_chaos_simulation\\([\\s\\S]*?--verify-replay",
+          "message": "chaos_user_simulator.py must enforce Tier-0/1 allowlist, QaMvsepBlockUntilUtcMs lease, and deterministic replay"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": ".agents/scripts/scarlett_loopback_delta.py",
+          "pattern": "HARD_H2_H3_REJECT_DB\\s*=\\s*-45\\.0[\\s\\S]*?def\\s+deconvolve_2x2_left_multiplied\\([\\s\\S]*?def\\s+compare_cables\\(",
+          "message": "scarlett_loopback_delta.py must enforce -45dB cable fault rejection, left-multiplied 2x2 deconvolution, and --compare-cables"
+        }
+      ]
     }
   ]
 }
+

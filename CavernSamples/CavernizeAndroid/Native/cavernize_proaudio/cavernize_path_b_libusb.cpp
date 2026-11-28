@@ -2,10 +2,12 @@
 #include "cavernize_ringbuffer.h"
 #include "cavernize_uac2_core.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <ctime>
 #include <mutex>
 #include <thread>
 #include <unistd.h>
@@ -109,11 +111,45 @@ struct PathBLibUsbEngine {
     std::atomic<int32_t> in_xruns{0};
     std::atomic<float> drift_ppm{0.0f};
     std::atomic<float> est_rtt_ms{0.0f};
+    std::atomic<bool> hold_capture_no_discard{false};
+    static constexpr uint32_t kCbRingSize = 64u;
+    std::atomic<uint32_t> cb_us_ring[kCbRingSize];
+    std::atomic<uint32_t> cb_cpu_x100_ring[kCbRingSize];
+    std::atomic<uint32_t> cb_ring_write{0};
+    std::atomic<uint32_t> cb_max_us{0};
 
     float pack_scratch[1024];
     float unpack_scratch[1024];
     int underrun_ramp_state = 1;
     float last_out_sample[2] = {0.0f, 0.0f};
+
+    static inline uint64_t monotonic_now_ns() {
+        struct timespec ts;
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+            return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+        }
+        return 0ULL;
+    }
+
+    inline void record_callback_timing(uint64_t start_ns, uint32_t frames) {
+        if (start_ns == 0ULL || frames == 0u) return;
+        uint64_t end_ns = monotonic_now_ns();
+        if (end_ns <= start_ns) return;
+        uint32_t elapsed_us = static_cast<uint32_t>((end_ns - start_ns) / 1000ULL);
+        int32_t sr = active_sr.load(std::memory_order_relaxed);
+        if (sr < 8000) sr = 48000;
+        double burst_us = (static_cast<double>(frames) * 1000000.0) / static_cast<double>(sr);
+        uint32_t cpu_x100 = burst_us > 1.0
+            ? static_cast<uint32_t>(std::min(100000.0, (static_cast<double>(elapsed_us) / burst_us) * 10000.0))
+            : 0u;
+        uint32_t idx = cb_ring_write.fetch_add(1u, std::memory_order_relaxed);
+        cb_us_ring[idx & (kCbRingSize - 1u)].store(elapsed_us, std::memory_order_relaxed);
+        cb_cpu_x100_ring[idx & (kCbRingSize - 1u)].store(cpu_x100, std::memory_order_relaxed);
+        uint32_t prev_max = cb_max_us.load(std::memory_order_relaxed);
+        while (elapsed_us > prev_max &&
+               !cb_max_us.compare_exchange_weak(prev_max, elapsed_us, std::memory_order_relaxed)) {
+        }
+    }
 
     struct IoGuard {
         std::atomic<int32_t>& counter;
@@ -226,11 +262,13 @@ struct PathBLibUsbEngine {
         TransferDisposition disp = classify_transfer(xfer, tok, &self);
         if (disp == TransferDisposition::Abort) return;
 
+        const uint64_t cb_start_ns = monotonic_now_ns();
         if (disp == TransferDisposition::TransientError) {
             self->out_xruns.fetch_add(1, std::memory_order_relaxed);
         }
-        self->fill_out_transfer(xfer, false);
+        uint32_t xfer_frames = self->fill_out_transfer(xfer, false);
         resubmit_or_retire(xfer, tok, self, &self->out_xruns);
+        self->record_callback_timing(cb_start_ns, xfer_frames);
     }
 
     static void LIBUSB_CALL on_in_complete(libusb_transfer* xfer) {
@@ -333,12 +371,13 @@ struct PathBLibUsbEngine {
         }
     }
 
-    void fill_out_transfer(libusb_transfer* xfer, bool initial_silence) {
+    uint32_t fill_out_transfer(libusb_transfer* xfer, bool initial_silence) {
         const uint32_t ch = pb_stream.channels > 0 ? pb_stream.channels : 2u;
         const uint32_t subslot = pb_stream.subslot_bytes > 0 ? pb_stream.subslot_bytes : 3u;
         const uint32_t bpf = ch * subslot;
         const uint32_t cur_rate = rate_1616.load(std::memory_order_relaxed);
         uint8_t* buf_ptr = xfer->buffer;
+        uint32_t total_frames = 0u;
 
         for (int i = 0; i < xfer->num_iso_packets; ++i) {
             uint32_t frames = cav_uac2_advance_packet_frames(&phase_accum_1616, cur_rate);
@@ -348,6 +387,7 @@ struct PathBLibUsbEngine {
             if (frames * 2u > 1024u) {
                 frames = 512u;
             }
+            total_frames += frames;
 
             if (initial_silence) {
                 /* Pre-zero initial startup URBs cleanly without pulling from empty ring or tripping bogus XRuns */
@@ -382,6 +422,7 @@ struct PathBLibUsbEngine {
             buf_ptr += bytes;
         }
         xfer->length = static_cast<int>(buf_ptr - xfer->buffer);
+        return total_frames;
     }
 
     int set_uac2_sample_rate(uint32_t hz) {
@@ -412,6 +453,12 @@ struct PathBLibUsbEngine {
         device_gone.store(false, std::memory_order_seq_cst);
         consec_transfer_errors.store(0, std::memory_order_relaxed);
         stopping.store(false, std::memory_order_release);
+        cb_ring_write.store(0u, std::memory_order_relaxed);
+        cb_max_us.store(0u, std::memory_order_relaxed);
+        for (uint32_t i = 0; i < kCbRingSize; ++i) {
+            cb_us_ring[i].store(0u, std::memory_order_relaxed);
+            cb_cpu_x100_ring[i].store(0u, std::memory_order_relaxed);
+        }
 
         /* Mandatory unrooted Android sequence: disable bus scanning before libusb_init */
         libusb_set_option(nullptr, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
@@ -971,6 +1018,27 @@ struct PathBLibUsbEngine {
         st->input_xruns = in_xruns.load(std::memory_order_relaxed);
         st->estimated_rtt_ms = est_rtt_ms.load(std::memory_order_relaxed);
         st->async_drift_ppm = drift_ppm.load(std::memory_order_relaxed);
+        uint32_t written = cb_ring_write.load(std::memory_order_relaxed);
+        uint32_t count = written < kCbRingSize ? written : kCbRingSize;
+        if (count > 0u) {
+            uint32_t us_buf[kCbRingSize];
+            uint32_t cpu_buf[kCbRingSize];
+            for (uint32_t i = 0; i < count; ++i) {
+                us_buf[i] = cb_us_ring[i].load(std::memory_order_relaxed);
+                cpu_buf[i] = cb_cpu_x100_ring[i].load(std::memory_order_relaxed);
+            }
+            std::sort(us_buf, us_buf + count);
+            std::sort(cpu_buf, cpu_buf + count);
+            uint32_t p95_idx = static_cast<uint32_t>((count - 1u) * 95u / 100u);
+            st->callback_p95_us = static_cast<float>(us_buf[p95_idx]);
+            st->callback_cpu_p95_pct = static_cast<float>(cpu_buf[p95_idx]) * 0.01f;
+            st->callback_max_us = static_cast<float>(cb_max_us.load(std::memory_order_relaxed));
+        } else {
+            st->callback_p95_us = 0.0f;
+            st->callback_cpu_p95_pct = 0.0f;
+            st->callback_max_us = 0.0f;
+        }
+        st->hold_capture_no_discard = hold_capture_no_discard.load(std::memory_order_acquire) ? 1 : 0;
     }
 };
 
@@ -1012,7 +1080,9 @@ int32_t path_b_read_capture(float* data, int32_t max_frames) {
     int32_t cap_frames = min_burst_cap > sr_cap ? min_burst_cap : sr_cap;
     if (cap_frames < 64) cap_frames = 64;
     if (cap_frames > 4096) cap_frames = 4096;
-    cav_rb_discard_oldest(&g_libusb.in_rb, static_cast<uint32_t>(cap_frames));
+    if (!g_libusb.hold_capture_no_discard.load(std::memory_order_acquire)) {
+        cav_rb_discard_oldest(&g_libusb.in_rb, static_cast<uint32_t>(cap_frames));
+    }
     return static_cast<int32_t>(cav_rb_read(&g_libusb.in_rb, data, static_cast<uint32_t>(max_frames), 0));
 }
 int32_t path_b_free_frames() {
@@ -1046,6 +1116,9 @@ void path_b_get_status(CavProAudioStatus* st) {
     PathBLibUsbEngine::IoGuard guard(g_libusb.io_inflight);
     g_libusb.fill_status(st);
 }
+void path_b_set_hold_capture_no_discard(int32_t enable) {
+    g_libusb.hold_capture_no_discard.store(enable != 0, std::memory_order_release);
+}
 int32_t path_b_scarlett2_init_step0(int32_t vendor_if, uint8_t* rx, int32_t rx_cap) {
     PathBLibUsbEngine::IoGuard guard(g_libusb.io_inflight);
     return g_libusb.scarlett2_init_step0(vendor_if, rx, rx_cap);
@@ -1066,6 +1139,7 @@ int32_t path_b_free_frames() { return 0; }
 int32_t path_b_buffered_frames() { return 0; }
 void path_b_flush_playback() {}
 void path_b_get_status(CavProAudioStatus* st) { if (st) memset(st, 0, sizeof(*st)); }
+void path_b_set_hold_capture_no_discard(int32_t) {}
 int32_t path_b_scarlett2_init_step0(int32_t, uint8_t*, int32_t) { return -29; }
 int32_t path_b_scarlett2_xfer(int32_t, const uint8_t*, int32_t, uint8_t*, int32_t) { return -29; }
 

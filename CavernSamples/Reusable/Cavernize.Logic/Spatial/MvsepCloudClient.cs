@@ -369,11 +369,161 @@ public sealed class MvsepCloudOptions {
 }
 
 /// <summary>
+/// Exception thrown by <see cref="QaFailClosedHttpHandler"/> and <see cref="MvsepCloudClient"/>
+/// whenever the QA/Chaos 0-credit fail-closed MVSEP block is armed.
+/// </summary>
+public sealed class MvsepQaCloudBlockedException : InvalidOperationException {
+    /// <summary>Creates a new fail-closed QA MVSEP block exception.</summary>
+    public MvsepQaCloudBlockedException(string message) : base(message) { }
+}
+
+/// <summary>
+/// Pure deterministic evaluation result for crash-safe MVSEP QA boot-lease enforcement.
+/// </summary>
+public readonly struct MvsepQaBootGuardResult {
+    /// <summary>True when the QA block must remain armed during this boot.</summary>
+    public bool ShouldBlockCloud { get; init; }
+
+    /// <summary>Safe <see cref="NeuralExecutionBackend"/> index to persist before network init.</summary>
+    public int SafeBackendIndex { get; init; }
+
+    /// <summary>True when backend index was reverted from MvsepCloud (1) to OnDevice (0).</summary>
+    public bool BackendRevertedToOffline { get; init; }
+
+    /// <summary>True when dirty-crash guard should be cleared (lease expired and backend is safe offline).</summary>
+    public bool ShouldClearDirtyGuard { get; init; }
+}
+
+/// <summary>
+/// Fail-closed <see cref="DelegatingHandler"/> that guarantees 0 HTTP requests ever leave the process
+/// to MVSEP endpoints while <see cref="MvsepCloudClient.IsQaCloudBlockActive"/> is armed.
+/// </summary>
+public sealed class QaFailClosedHttpHandler : DelegatingHandler {
+    readonly bool disposeInner;
+
+    /// <summary>Creates a fail-closed QA handler wrapping <paramref name="innerHandler"/> (or a default <see cref="HttpClientHandler"/>).</summary>
+    public QaFailClosedHttpHandler(HttpMessageHandler innerHandler = null, bool disposeInner = true)
+        : base(innerHandler ?? new HttpClientHandler()) {
+        this.disposeInner = innerHandler == null || disposeInner;
+    }
+
+    /// <inheritdoc/>
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+        if (MvsepCloudClient.IsQaCloudBlockActive) {
+            MvsepCloudClient.RecordQaBlockedAttempt();
+            string method = request?.Method?.Method ?? "HTTP";
+            string host = request?.RequestUri?.Host ?? "mvsep.com";
+            throw new MvsepQaCloudBlockedException(
+                $"QA fail-closed MVSEP block active ({method} {host} blocked; 0 credits spent).");
+        }
+        return base.SendAsync(request, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    protected override void Dispose(bool disposing) {
+        if (disposing && !disposeInner) {
+            // Avoid disposing caller-owned HttpMessageHandler used in unit tests
+            return;
+        }
+        base.Dispose(disposing);
+    }
+}
+
+/// <summary>
 /// Official MVSEP REST API v1 client (<c>https://mvsep.com/api</c>) with strict HTTPS host allowlisting,
 /// token redaction, lossless WAV upload/download, optional external codec decoder hook, and canonical
 /// <see cref="NeuralSeparatedTrack"/> mapping for seamless integration into Cavern Spatial Karaoke, 3D Upmix, and CNTC v3 cache.
 /// </summary>
 public sealed class MvsepCloudClient : IDisposable {
+    static long qaBlockUntilUtcMs;
+    static long qaBlockedRequestCount;
+
+    /// <summary>UTC epoch milliseconds until which all MVSEP HTTP egress is fail-closed blocked (0 = disarmed).</summary>
+    public static long QaBlockUntilUtcMs => Volatile.Read(ref qaBlockUntilUtcMs);
+
+    /// <summary>True whenever the fail-closed QA MVSEP 0-credit block lease is currently active.</summary>
+    public static bool IsQaCloudBlockActive =>
+        Volatile.Read(ref qaBlockUntilUtcMs) > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    /// <summary>Total number of MVSEP cloud calls intercepted and blocked by the QA kill-switch in this process.</summary>
+    public static long QaBlockedRequestCount => Volatile.Read(ref qaBlockedRequestCount);
+
+    /// <summary>Arms (when <paramref name="utcMs"/> &gt; now) or disarms (when &lt;= 0) the process-wide QA MVSEP block.</summary>
+    public static void ArmQaCloudBlockUntil(long utcMs) =>
+        Volatile.Write(ref qaBlockUntilUtcMs, utcMs > 0 ? utcMs : 0L);
+
+    /// <summary>Arms the process-wide QA MVSEP block for <paramref name="seconds"/> seconds from now.</summary>
+    public static long ArmQaCloudBlockForSeconds(int seconds) {
+        int clamped = Math.Clamp(seconds, 1, 86_400);
+        long until = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + (clamped * 1000L);
+        ArmQaCloudBlockUntil(until);
+        return until;
+    }
+
+    /// <summary>
+    /// Refuses disarm while <paramref name="currentBackendIndex"/> is still <see cref="NeuralExecutionBackend.MvsepCloud"/> (1),
+    /// returning <c>false</c> and recommending <see cref="NeuralExecutionBackend.OnDevice"/> (0).
+    /// </summary>
+    public static bool TryDisarmQaCloudBlock(int currentBackendIndex, out int safeBackendIndex) {
+        if (currentBackendIndex == (int)NeuralExecutionBackend.MvsepCloud) {
+            safeBackendIndex = (int)NeuralExecutionBackend.OnDevice;
+            return false;
+        }
+        safeBackendIndex = currentBackendIndex;
+        ArmQaCloudBlockUntil(0L);
+        return true;
+    }
+
+    /// <summary>
+    /// Pure boot-time crash-lease evaluator: prevents LMKD/crash relaunch from ever leaving
+    /// <c>NeuralExecutionBackendIndex == 1</c> active without the QA block armed.
+    /// </summary>
+    public static MvsepQaBootGuardResult EvaluateBootLeaseGuard(
+        long leaseUntilUtcMs,
+        long nowUtcMs,
+        int currentBackendIndex,
+        bool dirtyCrashGuard) {
+        bool leaseActive = leaseUntilUtcMs > nowUtcMs;
+        bool isCloud = currentBackendIndex == (int)NeuralExecutionBackend.MvsepCloud;
+        if (leaseActive) {
+            return new MvsepQaBootGuardResult {
+                ShouldBlockCloud = true,
+                SafeBackendIndex = isCloud ? (int)NeuralExecutionBackend.OnDevice : currentBackendIndex,
+                BackendRevertedToOffline = isCloud,
+                ShouldClearDirtyGuard = false
+            };
+        }
+        if (dirtyCrashGuard) {
+            return new MvsepQaBootGuardResult {
+                ShouldBlockCloud = false,
+                SafeBackendIndex = isCloud ? (int)NeuralExecutionBackend.OnDevice : currentBackendIndex,
+                BackendRevertedToOffline = isCloud,
+                ShouldClearDirtyGuard = true
+            };
+        }
+        return new MvsepQaBootGuardResult {
+            ShouldBlockCloud = false,
+            SafeBackendIndex = currentBackendIndex,
+            BackendRevertedToOffline = false,
+            ShouldClearDirtyGuard = false
+        };
+    }
+
+    /// <summary>Resets the QA blocked-attempt counter (for deterministic unit/chaos runs).</summary>
+    public static void ResetQaBlockedRequestCount() =>
+        Volatile.Write(ref qaBlockedRequestCount, 0L);
+
+    internal static void RecordQaBlockedAttempt() =>
+        Interlocked.Increment(ref qaBlockedRequestCount);
+
+    static void ThrowIfQaBlocked(string operation) {
+        if (IsQaCloudBlockActive) {
+            RecordQaBlockedAttempt();
+            throw new MvsepQaCloudBlockedException(
+                $"QA fail-closed MVSEP block active ({operation} blocked; 0 credits spent).");
+        }
+    }
+
     static readonly HashSet<string> AllowedHosts = new(StringComparer.OrdinalIgnoreCase) {
         "mvsep.com",
         "www.mvsep.com",
@@ -388,12 +538,11 @@ public sealed class MvsepCloudClient : IDisposable {
     readonly HttpClient http;
     readonly bool ownsHttpClient;
 
-    /// <summary>Creates a new MVSEP REST client using an optional injectable <see cref="HttpMessageHandler"/> for unit testing.</summary>
+    /// <summary>Creates a new MVSEP REST client wrapped in <see cref="QaFailClosedHttpHandler"/> with an optional injectable inner <see cref="HttpMessageHandler"/> for unit testing.</summary>
     public MvsepCloudClient(HttpMessageHandler handler = null) {
-        ownsHttpClient = handler == null;
-        http = handler != null
-            ? new HttpClient(handler, disposeHandler: false)
-            : new HttpClient();
+        ownsHttpClient = true;
+        QaFailClosedHttpHandler guardHandler = new(handler, disposeInner: handler == null);
+        http = new HttpClient(guardHandler, disposeHandler: true);
         http.Timeout = TimeSpan.FromMinutes(5);
         http.DefaultRequestHeaders.UserAgent.ParseAdd("CavernizeAndroid/3.0 (MVSEP-REST)");
     }
@@ -450,6 +599,7 @@ public sealed class MvsepCloudClient : IDisposable {
     public async Task<IReadOnlyList<MvsepRemoteAlgorithmInfo>> FetchAlgorithmsAsync(
         string baseUrl = MvsepCloudOptions.DefaultBaseUrl,
         CancellationToken token = default) {
+        ThrowIfQaBlocked("GET /app/algorithms");
         Uri root = ValidateOfficialBaseUri(baseUrl);
         string url = $"{root}/app/algorithms";
         using HttpResponseMessage resp = await http.GetAsync(url, token).ConfigureAwait(false);
@@ -479,6 +629,7 @@ public sealed class MvsepCloudClient : IDisposable {
         MvsepAlgorithmPreset preset,
         MvsepCloudOptions options,
         CancellationToken token = default) {
+        ThrowIfQaBlocked("POST /separation/create");
         ArgumentNullException.ThrowIfNull(audioBytes);
         ArgumentNullException.ThrowIfNull(preset);
         ArgumentNullException.ThrowIfNull(options);
@@ -534,7 +685,7 @@ public sealed class MvsepCloudClient : IDisposable {
                 throw new InvalidOperationException($"MVSEP create failed: {RedactSecrets(errMsg, apiToken)}");
             }
             return hash;
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
+        } catch (Exception ex) when (ex is not OperationCanceledException && ex is not MvsepQaCloudBlockedException) {
             throw new InvalidOperationException(RedactSecrets(ex.Message, apiToken), ex);
         }
     }
@@ -546,6 +697,7 @@ public sealed class MvsepCloudClient : IDisposable {
         string hash,
         MvsepCloudOptions options,
         CancellationToken token = default) {
+        ThrowIfQaBlocked("GET /separation/get");
         if (string.IsNullOrWhiteSpace(hash)) {
             throw new ArgumentException("Job hash is required.", nameof(hash));
         }
@@ -607,7 +759,7 @@ public sealed class MvsepCloudClient : IDisposable {
                 QueueOrder = queueOrder,
                 Files = files
             };
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
+        } catch (Exception ex) when (ex is not OperationCanceledException && ex is not MvsepQaCloudBlockedException) {
             throw new InvalidOperationException(RedactSecrets(ex.Message, apiToken), ex);
         }
     }
@@ -616,6 +768,7 @@ public sealed class MvsepCloudClient : IDisposable {
     /// Downloads a separated stem file from an allowlisted HTTPS MVSEP URL.
     /// </summary>
     public async Task<byte[]> DownloadStemBytesAsync(string downloadUrl, CancellationToken token = default) {
+        ThrowIfQaBlocked("GET stem download");
         if (!Uri.TryCreate(downloadUrl, UriKind.Absolute, out Uri uri) ||
             !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
             !IsAllowedMvsepHost(uri.Host)) {
@@ -646,6 +799,7 @@ public sealed class MvsepCloudClient : IDisposable {
         string existingJobHash = null,
         Action<string> onJobCreated = null,
         Action<string> onJobTerminal = null) {
+        ThrowIfQaBlocked("SeparateTrackAsync");
         ArgumentNullException.ThrowIfNull(mixLeft);
         ArgumentNullException.ThrowIfNull(mixRight);
         ArgumentNullException.ThrowIfNull(preset);
@@ -848,6 +1002,7 @@ public sealed class MvsepCloudClient : IDisposable {
         string existingStage2JobHash = null,
         Action<string> onStage2JobCreated = null,
         Action<string> onStage2JobTerminal = null) {
+        ThrowIfQaBlocked("SeparateTwoStageCascadeAsync");
         ArgumentNullException.ThrowIfNull(mixLeft);
         ArgumentNullException.ThrowIfNull(mixRight);
         ArgumentNullException.ThrowIfNull(stage1Preset);

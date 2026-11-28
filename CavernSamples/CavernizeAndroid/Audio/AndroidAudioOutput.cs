@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using Android.Content;
 using Android.Media;
 using Android.OS;
@@ -556,7 +558,7 @@ public sealed partial class AndroidAudioOutput : IDisposable {
             if (needStartPlay && audioTrack != null) {
                 // Pre-fill 2 blocks into stopped AudioTrack before Play() so USB/HAL never starts dry
                 for (int pre = 0; pre < 2 && running; pre++) {
-                    int preFrames = engine.RenderNextInterleavedBlock(floatRenderBuffer, framesToRequest);
+                    int preFrames = RenderBlockInstrumented(framesToRequest, siteIndex: 0);
                     if (preFrames <= 0 || Volatile.Read(ref flushEpoch) != epochBeforeWrite) {
                         break;
                     }
@@ -573,7 +575,7 @@ public sealed partial class AndroidAudioOutput : IDisposable {
                 }
                 continue;
             }
-            int frames = engine.RenderNextInterleavedBlock(floatRenderBuffer, framesToRequest);
+            int frames = RenderBlockInstrumented(framesToRequest, siteIndex: 1);
             if (frames > 0 && audioTrack != null && running) {
                 if (Volatile.Read(ref flushEpoch) != epochBeforeWrite) {
                     continue;
@@ -683,7 +685,7 @@ public sealed partial class AndroidAudioOutput : IDisposable {
             }
             int epochBefore = Volatile.Read(ref flushEpoch);
             if (spscRingHandoff.AvailableReadFrames < writeChunk) {
-                int rendered = engine.RenderNextInterleavedBlock(floatRenderBuffer, writeChunk);
+                int rendered = RenderBlockInstrumented(writeChunk, siteIndex: 2);
                 if (rendered > 0) {
                     if (Volatile.Read(ref flushEpoch) != epochBefore) {
                         spscRingHandoff.Reset();
@@ -1063,7 +1065,7 @@ public sealed partial class AndroidAudioOutput : IDisposable {
                 if (buffered >= targetFrames || free < chunk) {
                     break;
                 }
-                int rendered = engine.RenderNextInterleavedBlock(floatRenderBuffer, Math.Min(chunk, free));
+                int rendered = RenderBlockInstrumented(Math.Min(chunk, free), siteIndex: 3);
                 if (rendered <= 0 || Volatile.Read(ref flushEpoch) != epochBefore) {
                     break;
                 }

@@ -1,12 +1,14 @@
 #include "cavernize_proaudio_api.h"
 #include "cavernize_ringbuffer.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -56,8 +58,42 @@ struct PathAAudioEngine {
     std::atomic<int32_t> rb_underrun_xruns{0};
     std::atomic<int32_t> tuner_cooldown{0};
     std::atomic<float> measured_rtt_ms{0.0f};
+    std::atomic<bool> hold_capture_no_discard{false};
+    static constexpr uint32_t kCbRingSize = 64u;
+    std::atomic<uint32_t> cb_us_ring[kCbRingSize];
+    std::atomic<uint32_t> cb_cpu_x100_ring[kCbRingSize];
+    std::atomic<uint32_t> cb_ring_write{0};
+    std::atomic<uint32_t> cb_max_us{0};
     int underrun_ramp_state = 1;
     float last_out_sample[2] = {0.0f, 0.0f};
+
+    static inline uint64_t monotonic_now_ns() {
+        struct timespec ts;
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+            return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+        }
+        return 0ULL;
+    }
+
+    inline void record_callback_timing(uint64_t start_ns, uint32_t frames) {
+        if (start_ns == 0ULL || frames == 0u) return;
+        uint64_t end_ns = monotonic_now_ns();
+        if (end_ns <= start_ns) return;
+        uint32_t elapsed_us = static_cast<uint32_t>((end_ns - start_ns) / 1000ULL);
+        int32_t sr = active_sr.load(std::memory_order_relaxed);
+        if (sr < 8000) sr = 48000;
+        double burst_us = (static_cast<double>(frames) * 1000000.0) / static_cast<double>(sr);
+        uint32_t cpu_x100 = burst_us > 1.0
+            ? static_cast<uint32_t>(std::min(100000.0, (static_cast<double>(elapsed_us) / burst_us) * 10000.0))
+            : 0u;
+        uint32_t idx = cb_ring_write.fetch_add(1u, std::memory_order_relaxed);
+        cb_us_ring[idx & (kCbRingSize - 1u)].store(elapsed_us, std::memory_order_relaxed);
+        cb_cpu_x100_ring[idx & (kCbRingSize - 1u)].store(cpu_x100, std::memory_order_relaxed);
+        uint32_t prev_max = cb_max_us.load(std::memory_order_relaxed);
+        while (elapsed_us > prev_max &&
+               !cb_max_us.compare_exchange_weak(prev_max, elapsed_us, std::memory_order_relaxed)) {
+        }
+    }
 
     static aaudio_data_callback_result_t on_output_ready(
         AAudioStream* stream,
@@ -72,6 +108,7 @@ struct PathAAudioEngine {
             return AAUDIO_CALLBACK_RESULT_CONTINUE;
         }
 
+        const uint64_t cb_start_ns = monotonic_now_ns();
         const uint32_t frames = static_cast<uint32_t>(num_frames);
 
         /* 1. Output-driven full-duplex capture (google/oboe golden rule: non-blocking read inside output callback) */
@@ -149,6 +186,7 @@ struct PathAAudioEngine {
             self->tuner_cooldown.store(cd - 1, std::memory_order_relaxed);
         }
 
+        self->record_callback_timing(cb_start_ns, frames);
         return AAUDIO_CALLBACK_RESULT_CONTINUE;
     }
 
@@ -315,6 +353,12 @@ struct PathAAudioEngine {
         cached_in_xruns.store(0, std::memory_order_relaxed);
         rb_underrun_xruns.store(0, std::memory_order_relaxed);
         tuner_cooldown.store(0, std::memory_order_relaxed);
+        cb_ring_write.store(0u, std::memory_order_relaxed);
+        cb_max_us.store(0u, std::memory_order_relaxed);
+        for (uint32_t i = 0; i < kCbRingSize; ++i) {
+            cb_us_ring[i].store(0u, std::memory_order_relaxed);
+            cb_cpu_x100_ring[i].store(0u, std::memory_order_relaxed);
+        }
         underrun_ramp_state = 1;
         last_out_sample[0] = 0.0f;
         last_out_sample[1] = 0.0f;
@@ -459,6 +503,27 @@ struct PathAAudioEngine {
         st->input_xruns = cached_in_xruns.load(std::memory_order_relaxed);
         st->estimated_rtt_ms = measured_rtt_ms.load(std::memory_order_relaxed);
         st->async_drift_ppm = 0.0f;
+        uint32_t written = cb_ring_write.load(std::memory_order_relaxed);
+        uint32_t count = written < kCbRingSize ? written : kCbRingSize;
+        if (count > 0u) {
+            uint32_t us_buf[kCbRingSize];
+            uint32_t cpu_buf[kCbRingSize];
+            for (uint32_t i = 0; i < count; ++i) {
+                us_buf[i] = cb_us_ring[i].load(std::memory_order_relaxed);
+                cpu_buf[i] = cb_cpu_x100_ring[i].load(std::memory_order_relaxed);
+            }
+            std::sort(us_buf, us_buf + count);
+            std::sort(cpu_buf, cpu_buf + count);
+            uint32_t p95_idx = static_cast<uint32_t>((count - 1u) * 95u / 100u);
+            st->callback_p95_us = static_cast<float>(us_buf[p95_idx]);
+            st->callback_cpu_p95_pct = static_cast<float>(cpu_buf[p95_idx]) * 0.01f;
+            st->callback_max_us = static_cast<float>(cb_max_us.load(std::memory_order_relaxed));
+        } else {
+            st->callback_p95_us = 0.0f;
+            st->callback_cpu_p95_pct = 0.0f;
+            st->callback_max_us = 0.0f;
+        }
+        st->hold_capture_no_discard = hold_capture_no_discard.load(std::memory_order_acquire) ? 1 : 0;
     }
 };
 
@@ -507,7 +572,9 @@ int32_t path_a_read_capture(float* data, int32_t max_frames) {
         int32_t cap_frames = min_burst_cap > sr_cap ? min_burst_cap : sr_cap;
         if (cap_frames < 64) cap_frames = 64;
         if (cap_frames > 4096) cap_frames = 4096;
-        cav_rb_discard_oldest(&g_aaudio.in_rb, static_cast<uint32_t>(cap_frames));
+        if (!g_aaudio.hold_capture_no_discard.load(std::memory_order_acquire)) {
+            cav_rb_discard_oldest(&g_aaudio.in_rb, static_cast<uint32_t>(cap_frames));
+        }
         got = static_cast<int32_t>(cav_rb_read(&g_aaudio.in_rb, data, static_cast<uint32_t>(max_frames), 0));
     }
     g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
@@ -538,6 +605,9 @@ void path_a_flush_playback() {
     g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
 }
 void path_a_get_status(CavProAudioStatus* st) { g_aaudio.fill_status(st); }
+void path_a_set_hold_capture_no_discard(int32_t enable) {
+    g_aaudio.hold_capture_no_discard.store(enable != 0, std::memory_order_release);
+}
 
 #else
 
@@ -549,6 +619,7 @@ int32_t path_a_free_frames() { return 0; }
 int32_t path_a_buffered_frames() { return 0; }
 void path_a_flush_playback() {}
 void path_a_get_status(CavProAudioStatus* st) { if (st) memset(st, 0, sizeof(*st)); }
+void path_a_set_hold_capture_no_discard(int32_t) {}
 
 #endif /* __ANDROID__ */
 

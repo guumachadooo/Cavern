@@ -5120,11 +5120,91 @@ RunTest("T60_TrackB_StemHeapDedup_PreventsDuplicateKaraokeLohRetention", () => {
         "Distinct karaoke-only stem track must remain bound alongside spatial stems");
 });
 
+// =========================================================================
+// TEST 61 (W59.1): MVSEP QA Fail-Closed DelegatingHandler, Boot Lease Guard & Safe Disarm
+// =========================================================================
+RunTest("T61_W59_1_MvsepQaFailClosedHandler_BootLeaseGuard_And_DisarmSafety", () => {
+    int innerRequestsSent = 0;
+    var countingInner = new MvsepCountingStubHandler(() => Interlocked.Increment(ref innerRequestsSent));
+    MvsepCloudClient.ResetQaBlockedRequestCount();
+    try {
+        long untilMs = MvsepCloudClient.ArmQaCloudBlockForSeconds(600);
+        Assert(untilMs > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "ArmQaCloudBlockForSeconds must set future UTC lease");
+        Assert(MvsepCloudClient.IsQaCloudBlockActive, "IsQaCloudBlockActive must be true while lease is armed");
+
+        // 1. Direct QaFailClosedHttpHandler intercept must throw MvsepQaCloudBlockedException with 0 inner requests
+        using (HttpClient directHttp = new(new QaFailClosedHttpHandler(countingInner, disposeInner: false), disposeHandler: true)) {
+            bool threw = false;
+            try {
+                _ = directHttp.GetAsync("https://mvsep.com/api/app/algorithms").GetAwaiter().GetResult();
+            } catch (MvsepQaCloudBlockedException) {
+                threw = true;
+            }
+            Assert(threw, "QaFailClosedHttpHandler must throw MvsepQaCloudBlockedException when armed");
+        }
+
+        // 2. All 6 MvsepCloudClient HTTP/pipeline methods must fail-closed with 0 inner HTTP sends
+        using MvsepCloudClient client = new(countingInner);
+        MvsepCloudOptions opts = new() { ApiToken = "qa-dummy-token-123456" };
+        MvsepAlgorithmPreset preset = MvsepAlgorithmPreset.FindOrDefault("mvsep_bs_roformer_vocals");
+        float[] pcm = new float[64];
+
+        void ExpectBlocked(string label, Func<Task> call) {
+            bool caught = false;
+            try {
+                call().GetAwaiter().GetResult();
+            } catch (MvsepQaCloudBlockedException) {
+                caught = true;
+            }
+            Assert(caught, $"W59.1: {label} must throw MvsepQaCloudBlockedException under QA lease");
+        }
+
+        ExpectBlocked("FetchAlgorithmsAsync", () => client.FetchAlgorithmsAsync(MvsepCloudOptions.DefaultBaseUrl));
+        ExpectBlocked("CreateSeparationAsync", () => client.CreateSeparationAsync(new byte[] { 1, 2, 3, 4 }, "test.wav", preset, opts));
+        ExpectBlocked("GetSeparationStatusAsync", () => client.GetSeparationStatusAsync("dummy-hash", opts));
+        ExpectBlocked("DownloadStemBytesAsync", () => client.DownloadStemBytesAsync("https://files.mvsep.com/stem.wav"));
+        ExpectBlocked("SeparateTrackAsync", () => client.SeparateTrackAsync("qa-key", pcm, pcm, 48000, preset, opts));
+        ExpectBlocked("SeparateTwoStageCascadeAsync", () => client.SeparateTwoStageCascadeAsync("qa-key", pcm, pcm, 48000, preset, opts));
+
+        Assert(Volatile.Read(ref innerRequestsSent) == 0,
+            $"W59.1 CRITICAL: 0 HTTP requests may ever reach inner handler while armed (got {innerRequestsSent})");
+        Assert(MvsepCloudClient.QaBlockedRequestCount >= 7,
+            $"QaBlockedRequestCount must record all blocked attempts (got {MvsepCloudClient.QaBlockedRequestCount})");
+
+        // 3. TryDisarmQaCloudBlock must refuse disarm while NeuralExecutionBackendIndex == 1 (MvsepCloud)
+        bool disarmedWhileCloud = MvsepCloudClient.TryDisarmQaCloudBlock((int)NeuralExecutionBackend.MvsepCloud, out int safeIdx);
+        Assert(!disarmedWhileCloud && safeIdx == (int)NeuralExecutionBackend.OnDevice,
+            "TryDisarmQaCloudBlock must refuse disarm while backend=MvsepCloud(1) and recommend OnDevice(0)");
+        Assert(MvsepCloudClient.IsQaCloudBlockActive, "QA block must stay armed after refused disarm");
+
+        // 4. EvaluateBootLeaseGuard crash-reboot invariants
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        MvsepQaBootGuardResult activeCrash = MvsepCloudClient.EvaluateBootLeaseGuard(now + 60_000, now, 1, dirtyCrashGuard: true);
+        Assert(activeCrash.ShouldBlockCloud && activeCrash.SafeBackendIndex == 0 && activeCrash.BackendRevertedToOffline && !activeCrash.ShouldClearDirtyGuard,
+            "Active crash lease must keep block armed and revert backend 1 -> 0");
+
+        MvsepQaBootGuardResult expiredDirtyCrash = MvsepCloudClient.EvaluateBootLeaseGuard(now - 1_000, now, 1, dirtyCrashGuard: true);
+        Assert(!expiredDirtyCrash.ShouldBlockCloud && expiredDirtyCrash.SafeBackendIndex == 0 && expiredDirtyCrash.BackendRevertedToOffline && expiredDirtyCrash.ShouldClearDirtyGuard,
+            "Expired dirty-crash guard must still revert orphaned backend 1 -> 0 and clear dirty guard");
+
+        MvsepQaBootGuardResult cleanNormalBoot = MvsepCloudClient.EvaluateBootLeaseGuard(0, now, 1, dirtyCrashGuard: false);
+        Assert(!cleanNormalBoot.ShouldBlockCloud && cleanNormalBoot.SafeBackendIndex == 1 && !cleanNormalBoot.BackendRevertedToOffline,
+            "Clean non-QA user boot with backend=1 must be preserved untouched");
+
+        // 5. Disarm succeeds once backend is safely OnDevice(0)
+        bool disarmedOffline = MvsepCloudClient.TryDisarmQaCloudBlock((int)NeuralExecutionBackend.OnDevice, out int safeAfter);
+        Assert(disarmedOffline && safeAfter == 0 && !MvsepCloudClient.IsQaCloudBlockActive,
+            "TryDisarmQaCloudBlock must succeed once backend=OnDevice(0)");
+    } finally {
+        MvsepCloudClient.ArmQaCloudBlockUntil(0L);
+    }
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
 }
-Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2/T3/T5/T6/BP_UI_AI UNIT TESTS PASSED (0 failures).");
+Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2/T3/T5/T6/BP_UI_AI/W59-W60 UNIT TESTS PASSED (0 failures).");
 return 0;
 
 static byte[] BuildSyntheticVbrEac3Stream(int[] frameWords) {
@@ -5797,6 +5877,15 @@ sealed class TestFfmpegRunner : VoidX.WPF.FFmpeg.FFmpeg {
 
 sealed class SyncProgress(Action<double> onReport) : IProgress<double> {
     public void Report(double value) => onReport(value);
+}
+
+sealed class MvsepCountingStubHandler(Action onSend) : HttpMessageHandler {
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+        onSend();
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) {
+            Content = new StringContent("[]", Encoding.UTF8, "application/json")
+        });
+    }
 }
 """
 
@@ -6878,6 +6967,65 @@ def _py_stage20_trackb_live_qa_remediation_contracts() -> None:
     assert "!running || (!engine.IsPlaying && !engine.IsLiveMonitoringOrCalibrating)" in ao_tt, "BUG-TB6: LastAudioTrackUnderrunCount must return 0 when stopped/idle"
 
 
+def _py_stage21_qa_v3_chaos_headroom_scarlett_contracts() -> None:
+    """W59-W60 (BP_QA_V3_CHAOS_HEADROOM_AND_SCARLETT_DELTA): Verify MVSEP fail-closed lease, 4-site RT headroom, native ABI 101, Chaos replay, headroom_gate Q2, and Scarlett delta Q3."""
+    import importlib.util
+
+    # 1. Monolith zero-growth guard & new-file cap
+    bh_lines = (REPO_ROOT / ".agents" / "agent" / "cavern_bug_hunter.py").read_text(encoding="utf-8").splitlines()
+    agt_lines = (REPO_ROOT / ".agents" / "scripts" / "run_audio_ground_truth.py").read_text(encoding="utf-8").splitlines()
+    assert len(bh_lines) <= 4982, f"Monolith regression: cavern_bug_hunter.py grew to {len(bh_lines)}L (>4982L)"
+    assert len(agt_lines) <= 2567, f"Monolith regression: run_audio_ground_truth.py grew to {len(agt_lines)}L (>2567L)"
+
+    # 2. W59.1 MVSEP fail-closed + mutex_snapshot opcode 55 + awaitable OpenFileAsync
+    mvsep_cs = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "MvsepCloudClient.cs").read_text(encoding="utf-8")
+    assert "class QaFailClosedHttpHandler : DelegatingHandler" in mvsep_cs and "EvaluateBootLeaseGuard(" in mvsep_cs
+    store_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AppSettingsStore.cs").read_text(encoding="utf-8")
+    assert "QaMvsepBlockUntilUtcMs" in store_cs and "EnforceQaMvsepBootLeaseGuard(" in store_cs
+    neural_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Neural.cs").read_text(encoding="utf-8")
+    assert "IsQaMvsepBlockActive" in neural_ui and "IsQaCloudBlockActive" in neural_ui
+    svc_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LiveDiagnosticBridgeService.cs").read_text(encoding="utf-8")
+    assert "MutexSnapshot = 55" in svc_cs
+    lb_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.LiveBridge.cs").read_text(encoding="utf-8")
+    assert "GetMutualExclusionSnapshotJsonAsync" in lb_cs and "OpenLocalPathWithFallbackTaskAsync" in lb_cs
+
+    # 3. W60.1 4-site RT headroom + native ABI 101 + hold_capture_no_discard + ui.headroom_50pct
+    ao_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8")
+    for idx in range(4):
+        assert f"siteIndex: {idx})" in ao_cs, f"W60.1: RenderBlockInstrumented missing siteIndex: {idx}"
+    api_h = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Native" / "cavernize_proaudio" / "cavernize_proaudio_api.h").read_text(encoding="utf-8")
+    assert "cavernize_pa_set_hold_capture_no_discard" in api_h and "callback_cpu_p95_pct" in api_h
+    audit_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.SelfAudit.cs").read_text(encoding="utf-8")
+    assert "ui.headroom_50pct" in audit_cs and "fmTotal < 15" in audit_cs and "4.16" in audit_cs
+
+    # 4. Run headroom_gate.py Q2 fault-injection self-test
+    hg_spec = importlib.util.spec_from_file_location("headroom_gate_test", REPO_ROOT / ".agents" / "scripts" / "headroom_gate.py")
+    hg_mod = importlib.util.module_from_spec(hg_spec)
+    sys.modules[hg_spec.name] = hg_mod
+    hg_spec.loader.exec_module(hg_mod)
+    assert hg_mod.run_self_test() == 0, "W60.1 headroom_gate self-test failed"
+
+    # 5. Run chaos_user_simulator.py deterministic dual replay (seed=42)
+    cs_spec = importlib.util.spec_from_file_location("chaos_sim_test", REPO_ROOT / ".agents" / "agent" / "chaos_user_simulator.py")
+    cs_mod = importlib.util.module_from_spec(cs_spec)
+    sys.modules[cs_spec.name] = cs_mod
+    cs_spec.loader.exec_module(cs_mod)
+    b1 = cs_mod.SimulatedChaosBridge()
+    b2 = cs_mod.SimulatedChaosBridge()
+    r1 = cs_mod.run_chaos_simulation(b1, seed=42, steps=24)
+    r2 = cs_mod.run_chaos_simulation(b2, seed=42, steps=24)
+    assert r1["passed"] and r2["passed"], f"W59.2 chaos_user_simulator failed: {r1}"
+    assert r1["trace"] == r2["trace"], "W59.2 chaos_user_simulator seed=42 replay was not bit-identical"
+    assert b1.mvsep_http_requests == 0 and b2.mvsep_http_requests == 0, "W59.2 CRITICAL: 0 MVSEP HTTP credits allowed"
+
+    # 6. Run scarlett_loopback_delta.py Q3 DSP self-test
+    sc_spec = importlib.util.spec_from_file_location("scarlett_delta_test", REPO_ROOT / ".agents" / "scripts" / "scarlett_loopback_delta.py")
+    sc_mod = importlib.util.module_from_spec(sc_spec)
+    sys.modules[sc_spec.name] = sc_mod
+    sc_spec.loader.exec_module(sc_mod)
+    assert sc_mod.run_self_test() == 0, "W60.2 scarlett_loopback_delta self-test failed"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -6901,6 +7049,7 @@ PYTHON_CHECKS = [
     ("PY_T18_W55_5_And_W57_3_OneUi9GlassPopups_Gestures_FilterStudio_Tools", _py_stage18_w55_5_and_w57_3_contracts),
     ("PY_T19_V29102_Bugs_And_Epoch5_Contracts", _py_stage19_v29102_bugs_and_epoch5_contracts),
     ("PY_T20_TrackB_LiveQaRemediation_Contracts", _py_stage20_trackb_live_qa_remediation_contracts),
+    ("PY_T21_W59_W60_QaV3_Chaos_Headroom_Scarlett_Contracts", _py_stage21_qa_v3_chaos_headroom_scarlett_contracts),
 ]
 
 

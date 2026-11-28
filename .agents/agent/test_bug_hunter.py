@@ -1093,6 +1093,68 @@ class BugHunterUnitTests(unittest.TestCase):
         self.assertIn('((0, "Tab0"), (1, "Tab1"), (2, "Tab2"))', src)
         self.assertNotIn('"Tab4:SettingsButton"', src)
 
+    def test_w59_2_chaos_simulator_seed42_deterministic_replay_and_zero_mvsep_credits(self) -> None:
+        import chaos_user_simulator as cus
+
+        b1 = cus.SimulatedChaosBridge()
+        b2 = cus.SimulatedChaosBridge()
+        r1 = cus.run_chaos_simulation(b1, seed=42, steps=24, now_utc_ms=b1.now_ms)
+        r2 = cus.run_chaos_simulation(b2, seed=42, steps=24, now_utc_ms=b2.now_ms)
+        self.assertTrue(r1["passed"], r1)
+        self.assertTrue(r2["passed"], r2)
+        self.assertEqual(r1["mvsepHttpRequests"], 0)
+        self.assertEqual(r2["mvsepHttpRequests"], 0)
+        self.assertEqual(r1["openRaces"], 0)
+        self.assertEqual(r1["mutexViolations"], 0)
+        self.assertEqual(r1["trace"], r2["trace"])
+        # Verify strictly Tier-0/Tier-1 commands used (zero reflect_invoke/reflect_get)
+        used_cmds = {name for name, _ in b1.history}
+        self.assertTrue(used_cmds.issubset(cus.ALLOWED_CHAOS_COMMANDS), used_cmds)
+        # Verify QA block was armed BEFORE chaos steps and disarmed AFTER reverting backend to 0
+        self.assertEqual(b1.settings["NeuralExecutionBackendIndex"], 0)
+        self.assertEqual(b1.settings["QaMvsepBlockUntilUtcMs"], 0)
+
+    def test_w59_2_mvsep_crash_reboot_lease_and_fault_detection(self) -> None:
+        import chaos_user_simulator as cus
+
+        # 1. Simulated LMKD crash mid-Chaos with NeuralExecutionBackendIndex=1 persisted
+        b_crash = cus.SimulatedChaosBridge()
+        b_crash.cmd("settings_set", {"key": "QaMvsepBlockUntilUtcMs", "value": b_crash.now_ms + 600_000})
+        b_crash.cmd("settings_set", {"key": "NeuralExecutionBackendIndex", "value": 1})
+        # Disarm MUST be refused while backend == 1
+        disarm_bad = b_crash.cmd("settings_set", {"key": "QaMvsepBlockUntilUtcMs", "value": 0})
+        self.assertFalse(disarm_bad["ok"])
+        boot = b_crash.simulate_crash_and_relaunch()
+        self.assertTrue(boot["revertedBackendToOffline"])
+        self.assertEqual(boot["backendIndexAfterBoot"], 0)
+        self.assertTrue(boot["qaMvsepBlockActive"])
+        self.assertEqual(b_crash.mvsep_http_requests, 0)
+
+        # 2. Injected MVSEP leak immediately aborts Chaos with W59-CREDIT-01
+        b_leak = cus.SimulatedChaosBridge(inject_mvsep_leak=True)
+        r_leak = cus.run_chaos_simulation(b_leak, seed=42, steps=12, now_utc_ms=b_leak.now_ms)
+        self.assertFalse(r_leak["passed"])
+        self.assertGreater(r_leak["mvsepHttpRequests"], 0)
+        self.assertTrue(any(f.get("killId") == "W59-CREDIT-01" for f in r_leak["failures"]))
+
+        # 3. Injected OpenFileAsync race caught with W59-REPRO-03
+        b_race = cus.SimulatedChaosBridge(inject_open_race=True)
+        r_race = cus.run_chaos_simulation(b_race, seed=42, steps=8, now_utc_ms=b_race.now_ms)
+        self.assertFalse(r_race["passed"])
+        self.assertGreater(r_race["openRaces"], 0)
+        self.assertTrue(any(f.get("killId") == "W59-REPRO-03" for f in r_race["failures"]))
+
+    def test_w60_1_headroom_gate_catches_all_4_faults_zero_false_greens(self) -> None:
+        scripts_dir = AGENT_DIR.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        import headroom_gate as hg
+
+        self.assertEqual(hg.run_self_test(), 0)
+        self.assertLessEqual(hg.HeadroomBudget().ui_cpu_p95_limit_ms, 4.16)
+        self.assertEqual(hg.HeadroomBudget().pss_onnx_limit_mb, 1280.0)
+        self.assertEqual(hg.HeadroomBudget().pss_idle_limit_mb, 550.0)
+
 
 if __name__ == "__main__":
     unittest.main()

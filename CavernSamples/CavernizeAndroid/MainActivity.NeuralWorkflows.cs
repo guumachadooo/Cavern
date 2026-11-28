@@ -688,6 +688,9 @@ public partial class MainActivity {
         if (store == null || cfg == null) {
             return false;
         }
+        if (store.IsQaMvsepBlockActive || Cavernize.Logic.Spatial.MvsepCloudClient.IsQaCloudBlockActive) {
+            return false;
+        }
         return (cfg.ExecutionBackend == Cavernize.Logic.Spatial.NeuralExecutionBackend.MvsepCloud ||
                 cfg.ExecutionBackend == Cavernize.Logic.Spatial.NeuralExecutionBackend.AutoHybrid) &&
                !string.IsNullOrWhiteSpace(store.MvsepApiToken);

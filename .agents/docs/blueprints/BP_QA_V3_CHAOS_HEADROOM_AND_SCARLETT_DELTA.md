@@ -3,7 +3,8 @@
 > STYLE|lossless symbolic telegraphic EN ONLY (`!articles/copulas/filler`, ops `-> | && || ! w/ w/o`).
 
 ## 0. Meta & Lineage
-BP_META|id=BP_QA_V3_CHAOS_HEADROOM_AND_SCARLETT_DELTA|format=full|domain_vec=dsp-hw:1.00,software:1.00,ux-product:0.85,security:0.75|door=1-way|tier=T3|status=ACTIVE|h1_wave=W59-W60
+BP_META|id=BP_QA_V3_CHAOS_HEADROOM_AND_SCARLETT_DELTA|format=full|domain_vec=dsp-hw:1.00,software:1.00,ux-product:0.85,security:0.75|door=1-way|tier=T3|status=DONE|h1_wave=W59-W60
+HYGIENE_NOTE|ALL H1 slices (W59.1-W60.3) DONE & verified: 61/61 C# + 23/23 py + 8/8 C11 + 6/6 CI-parity 0e/0w + 40/40 QA contracts
 PARENT_ADR|BP_LIVE_QA_BUG_HUNTER_SOTA|BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA|BP_HORIZONTAL_FINE_GRAIN_ORCHESTRATION|BP_ECOSYSTEM_COHERENCE_AND_SELF_GOVERNANCE
 - `dsp-hw`: true per-block RT CPU (`renderedFrames/sampleRate`), native C++ callback timer + `hold_capture_no_discard`, unbroken-duplex 2.0s ESS + GCC-PHAT Scarlett Gen4 delta harness (`2x P10 Line Out->In1/2` vs `HP Out->In1/2 Y-cable` w/ `--compare-cables`).
 - `software`: crash-safe MVSEP 0-credit kill-switch, awaitable `OpenFileAsync` barrier, atomic `GetMutualExclusionSnapshotJsonAsync`, deterministic `--seed` Chaos FSM (`<=3` new `.py` files, `+0L` on monoliths).

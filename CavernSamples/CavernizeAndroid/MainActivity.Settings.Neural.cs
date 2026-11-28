@@ -1599,6 +1599,11 @@ AddDivider(slot2bCard);
 
         LinearLayout actionRow = HRow();
         Button testBtn = PillButton(S["MvsepTestConnBtn"], () => {
+            if (store.IsQaMvsepBlockActive || Cavernize.Logic.Spatial.MvsepCloudClient.IsQaCloudBlockActive) {
+                testStatusTv.Text = "Blocked by QA 0-credit MVSEP guard.";
+                testStatusTv.SetTextColor(OneUiTheme.PeachText);
+                return;
+            }
             string chosenUrl = serverUrls[Math.Clamp(serverSel.SelectedIndex, 0, serverUrls.Length - 1)];
             testStatusTv.Text = S["MvsepTestingStatus"];
             testStatusTv.SetTextColor(OneUiTheme.Primary);

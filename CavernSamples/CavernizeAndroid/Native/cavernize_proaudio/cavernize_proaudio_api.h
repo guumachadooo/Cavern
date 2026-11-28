@@ -41,9 +41,13 @@ typedef struct CavProAudioStatus {
     int32_t input_xruns;
     float estimated_rtt_ms;
     float async_drift_ppm;
+    float callback_p95_us;        /* 95th-percentile RT callback duration in microseconds */
+    float callback_max_us;        /* Max observed RT callback duration in microseconds */
+    float callback_cpu_p95_pct;   /* 95th-percentile RT callback CPU load % of burst duration */
+    int32_t hold_capture_no_discard; /* 1 = unbroken-duplex capture hold (skip 8 ms discard_oldest) */
 } CavProAudioStatus;
 
-/* Returns library ABI version (100 = W10 v1.0). */
+/* Returns library ABI version (101 = W60 v1.1). */
 int32_t cavernize_pa_get_version(void);
 
 /* Returns bitmask of compiled capabilities: bit 0 = Path A AAudio, bit 1 = Path B libusb UAC2. */
@@ -76,6 +80,12 @@ int32_t cavernize_pa_write_playback(const float* stereo_interleaved, int32_t fra
 /* Reads captured interleaved float32 microphone frames from the native lock-free IN ring buffer. */
 int32_t cavernize_pa_read_capture(float* stereo_interleaved, int32_t max_frames);
 
+/* Arms/disarms lock-free unbroken-duplex capture hold (skips 8 ms cav_rb_discard_oldest during sweep calibration). */
+void cavernize_pa_set_hold_capture_no_discard(int32_t enable);
+
+/* Returns 1 if unbroken-duplex capture hold is currently armed, 0 otherwise. */
+int32_t cavernize_pa_get_hold_capture_no_discard(void);
+
 /* Returns free frames available in the playback ring buffer (for non-blocking producer pacing). */
 int32_t cavernize_pa_get_playback_free_frames(void);
 
@@ -85,7 +95,7 @@ int32_t cavernize_pa_get_playback_buffered_frames(void);
 /* Requests a lock-free SPSC-safe flush of all currently buffered playback frames. */
 void cavernize_pa_flush_playback(void);
 
-/* Queries live hardware status, latency, clock drift ppm, and xrun counts. */
+/* Queries live hardware status, latency, clock drift ppm, callback CPU%, and xrun counts. */
 int32_t cavernize_pa_get_status(CavProAudioStatus* out_status);
 
 /* Sends Focusrite Scarlett2/Gen4 vendor init step 0 (bmRequestType=0xA1, bRequest=0x00, 24B read) over Path B. */

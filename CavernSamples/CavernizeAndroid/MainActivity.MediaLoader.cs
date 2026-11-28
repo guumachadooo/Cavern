@@ -392,33 +392,51 @@ public partial class MainActivity {
         OpenContent(file, meta);
     }
 
-    void OpenLocalPathWithFallbackAsync(string path, int? switchToTab = null, bool autoPlay = false, bool bypassBusyGuard = false) {
+    void OpenLocalPathWithFallbackAsync(string path, int? switchToTab = null, bool autoPlay = false, bool bypassBusyGuard = false) =>
+        _ = OpenLocalPathWithFallbackTaskAsync(path, switchToTab, autoPlay, bypassBusyGuard);
+
+    Task<(bool ok, string message)> OpenLocalPathWithFallbackTaskAsync(
+        string path,
+        int? switchToTab = null,
+        bool autoPlay = false,
+        bool bypassBusyGuard = false) {
         if (!bypassBusyGuard && (isOperationRunning || isPreparingTrueHD)) {
             ShowError(S["OpRunning"]);
-            return;
+            return Task.FromResult((false, S["OpRunning"]));
         }
+        TaskCompletionSource<(bool ok, string message)> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         currentMediaUri = null;
         SetConvertStatus(S["CopyingMedia"], -1);
         SetWorkspaceHeaderText(Path.GetFileName(path));
-        Task.Run(() => {
+        _ = Task.Run(() => {
             try {
                 MediaArtworkMetadata meta = MediaMetadataHelper.Extract(this, null, path, Path.GetFileName(path));
                 AudioFile file = OpenAudioFileResilient(path, out string newFallbackSessionDir);
                 RunOnUiThread(() => {
-                    EnsureActiveQueueForCurrentFile(path);
-                    string oldFallback = activeFallbackSessionDir;
-                    activeFallbackSessionDir = newFallbackSessionDir;
-                    pendingAutoPlayAfterLoad = autoPlay;
-                    OpenContent(file, meta);
-                    pendingAutoPlayAfterLoad = false;
-                    if (!string.IsNullOrEmpty(oldFallback) &&
-                        !string.Equals(oldFallback, newFallbackSessionDir, StringComparison.Ordinal) &&
-                        !IsSessionProtectedByQueue(oldFallback)) {
-                        TrueHDDecoderService.CleanupWorkDirectory(oldFallback);
-                    }
-                    SetConvertStatus(S["Ready"], 0);
-                    if (switchToTab.HasValue) {
-                        SwitchTab(switchToTab.Value);
+                    try {
+                        if (uiDestroyed) {
+                            file?.Dispose();
+                            tcs.TrySetResult((false, "MainActivity destroyed before file open completed."));
+                            return;
+                        }
+                        EnsureActiveQueueForCurrentFile(path);
+                        string oldFallback = activeFallbackSessionDir;
+                        activeFallbackSessionDir = newFallbackSessionDir;
+                        pendingAutoPlayAfterLoad = autoPlay;
+                        OpenContent(file, meta);
+                        pendingAutoPlayAfterLoad = false;
+                        if (!string.IsNullOrEmpty(oldFallback) &&
+                            !string.Equals(oldFallback, newFallbackSessionDir, StringComparison.Ordinal) &&
+                            !IsSessionProtectedByQueue(oldFallback)) {
+                            TrueHDDecoderService.CleanupWorkDirectory(oldFallback);
+                        }
+                        SetConvertStatus(S["Ready"], 0);
+                        if (switchToTab.HasValue) {
+                            SwitchTab(switchToTab.Value);
+                        }
+                        tcs.TrySetResult((true, $"Opened '{Path.GetFileName(path)}' (codec={selectedTrack?.Codec}, autoPlay={autoPlay})."));
+                    } catch (Exception uiEx) {
+                        tcs.TrySetResult((false, uiEx.Message));
                     }
                 });
             } catch (Exception ex) {
@@ -436,9 +454,11 @@ public partial class MainActivity {
                     SetWorkspaceHeaderText(LoadedFile != null ? Path.GetFileName(LoadedFile.Path) : S["SelectFilePill"]);
                     SetConvertStatus(ex.Message, 0);
                     ShowLoadFailureDialog(ex);
+                    tcs.TrySetResult((false, ex.Message));
                 });
             }
         });
+        return tcs.Task;
     }
 
     void SwitchActiveTrackVariant(LibraryTrackItem targetVariant, IReadOnlyList<LibraryTrackItem> allVariants) {

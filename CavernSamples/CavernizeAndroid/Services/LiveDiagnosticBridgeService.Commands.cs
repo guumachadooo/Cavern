@@ -264,6 +264,12 @@ public static partial class LiveDiagnosticBridgeService {
                     }, ct).ConfigureAwait(false);
                     return (true, json);
                 }
+                case BridgeCommandOpcode.MutexSnapshot: {
+                    if (host == null) {
+                        return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
+                    }
+                    return (true, await host.GetMutualExclusionSnapshotJsonAsync().ConfigureAwait(false));
+                }
                 case BridgeCommandOpcode.NativeStatus:
                     return (true, BuildNativeLibsStatusJson(context));
                 case BridgeCommandOpcode.AppState:

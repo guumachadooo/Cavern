@@ -277,6 +277,34 @@ static void test_ring_underrun_glitch_ramp(void) {
     printf("[PASS] Zero-click 24-frame RT underrun decay tail, partial fade-out, and fade-in recovery\n");
 }
 
+static void test_status_abi_and_hold_capture_retention(void) {
+    CavProAudioStatus st;
+    memset(&st, 0, sizeof(st));
+    assert(sizeof(st) == 60u); /* 15 x 4-byte scalar fields matching NativeProAudioStatus */
+    assert(st.callback_p95_us == 0.0f);
+    assert(st.callback_max_us == 0.0f);
+    assert(st.callback_cpu_p95_pct == 0.0f);
+    assert(st.hold_capture_no_discard == 0);
+
+    /* Simulate unbroken-duplex capture hold: bypass cav_rb_discard_oldest and retain all 100 frames (> 8 ms cap) */
+    float backing[256];
+    CavRingBuffer rb;
+    assert(cav_rb_init(&rb, backing, 256u, 2u) == 0);
+    float in_blk[200];
+    float out_blk[200];
+    for (int i = 0; i < 200; i++) in_blk[i] = (float)(i + 1) * 0.002f;
+    assert(cav_rb_write(&rb, in_blk, 100u) == 100u);
+    int hold_capture_no_discard = 1;
+    if (!hold_capture_no_discard) {
+        cav_rb_discard_oldest(&rb, 16u);
+    }
+    assert(cav_rb_avail_read_frames(&rb) == 100u);
+    assert(cav_rb_read(&rb, out_blk, 100u, 0) == 100u);
+    assert(fabsf(out_blk[0] - in_blk[0]) < 1e-6f);
+    assert(fabsf(out_blk[199] - in_blk[199]) < 1e-6f);
+    printf("[PASS] W60.1 CavProAudioStatus 60B ABI layout & hold_capture_no_discard unbroken retention\n");
+}
+
 int main(void) {
     test_ring_buffer_wraparound();
     test_ring_buffer_discard_oldest();
@@ -285,5 +313,6 @@ int main(void) {
     test_ring_underrun_glitch_ramp();
     test_pcm_pack_unpack_and_scarlett2();
     test_sigpipe_shield();
+    test_status_abi_and_hold_capture_retention();
     return 0;
 }

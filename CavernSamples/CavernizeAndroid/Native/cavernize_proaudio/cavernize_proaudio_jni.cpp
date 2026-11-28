@@ -21,6 +21,7 @@ int32_t path_a_free_frames();
 int32_t path_a_buffered_frames();
 void path_a_flush_playback();
 void path_a_get_status(CavProAudioStatus* st);
+void path_a_set_hold_capture_no_discard(int32_t enable);
 
 int32_t path_b_start(int32_t usb_fd, int32_t sr, int32_t buf_frames, int32_t enable_in);
 void path_b_stop();
@@ -31,12 +32,14 @@ int32_t path_b_free_frames();
 int32_t path_b_buffered_frames();
 void path_b_flush_playback();
 void path_b_get_status(CavProAudioStatus* st);
+void path_b_set_hold_capture_no_discard(int32_t enable);
 int32_t path_b_scarlett2_init_step0(int32_t vendor_if, uint8_t* rx, int32_t rx_cap);
 int32_t path_b_scarlett2_xfer(int32_t vendor_if, const uint8_t* tx, int32_t tx_len, uint8_t* rx, int32_t rx_cap);
 } /* namespace cavernize */
 
 static std::atomic<int32_t> g_active_backend{CAV_PA_BACKEND_NONE};
 static std::atomic<int32_t> g_io_inflight{0};
+static std::atomic<int32_t> g_hold_capture_no_discard{0};
 static std::mutex g_lifecycle_mtx;
 
 namespace {
@@ -86,7 +89,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* /*vm*/, void* /*reserved*/) {
 #endif
 
 int32_t cavernize_pa_get_version(void) {
-    return 100; /* W10 v1.0 */
+    return 101; /* W60 v1.1 */
 }
 
 int32_t cavernize_pa_get_capabilities(void) {
@@ -108,6 +111,7 @@ int32_t cavernize_pa_start_aaudio(
     int32_t input_device_id) {
     std::lock_guard<std::mutex> lock(g_lifecycle_mtx);
     stop_locked_jni();
+    cavernize::path_a_set_hold_capture_no_discard(g_hold_capture_no_discard.load(std::memory_order_acquire));
     int32_t rc = cavernize::path_a_start(sample_rate, buffer_frames, enable_input, output_device_id, input_device_id);
     if (rc == 0) {
         g_active_backend.store(CAV_PA_BACKEND_PATH_A_AAUDIO, std::memory_order_release);
@@ -122,6 +126,7 @@ int32_t cavernize_pa_start_libusb(
     int32_t enable_input) {
     std::lock_guard<std::mutex> lock(g_lifecycle_mtx);
     stop_locked_jni();
+    cavernize::path_b_set_hold_capture_no_discard(g_hold_capture_no_discard.load(std::memory_order_acquire));
     int32_t rc = cavernize::path_b_start(usb_fd, sample_rate, buffer_frames, enable_input);
     if (rc == 0) {
         g_active_backend.store(CAV_PA_BACKEND_PATH_B_LIBUSB, std::memory_order_release);
@@ -161,6 +166,17 @@ int32_t cavernize_pa_read_capture(float* stereo_interleaved, int32_t max_frames)
         return cavernize::path_a_read_capture(stereo_interleaved, max_frames);
     }
     return 0;
+}
+
+void cavernize_pa_set_hold_capture_no_discard(int32_t enable) {
+    int32_t flag = enable != 0 ? 1 : 0;
+    g_hold_capture_no_discard.store(flag, std::memory_order_release);
+    cavernize::path_a_set_hold_capture_no_discard(flag);
+    cavernize::path_b_set_hold_capture_no_discard(flag);
+}
+
+int32_t cavernize_pa_get_hold_capture_no_discard(void) {
+    return g_hold_capture_no_discard.load(std::memory_order_acquire);
 }
 
 int32_t cavernize_pa_get_playback_free_frames(void) {
