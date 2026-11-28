@@ -14,16 +14,20 @@
 
 ## 2. Prioritized Pending Work Queue (Structural Track A FIRST -> HW Track B -> App Reform Track C LAST)
 
-### TRACK A | P0 — Structural, Zero-Static Co-Evolution, Coherence & Meta-Governance (ALL H1 DONE)
+### TRACK A | P0 — Structural, Coherence & Bug-Hunting Foundations (W56.1-W56.5 & W58 DONE | [NEXT #0] W59-W60 FIRST)
 1. **`W56.1–W56.3` (`[DONE | DFP v2.21.1–v2.22.5]` — `BP_ECOSYSTEM_COHERENCE_AND_SELF_GOVERNANCE.md`):** `PLANNER_REEXEC=1`, Triad `(semver,tree_sha256)` parity, `shlex` cmd guard, `<1,500L` engine split, machine-generated `COHERENCE_HUB.md` + `domains.json` + `@verify_check`, & Reflexive Meta-Governance (`T0/T1/T2` + `T0` canary + Living `CODE_ANCHORS` + Plane-2 `pro [L3]` `<=4/wk`).
 2. **`W56.4` (`[DONE]` — `BP_ECOSYSTEM_COHERENCE_AND_SELF_GOVERNANCE.md`):** App Zero-Static Foundation (`co_evolve.py` `~40ms`, `0 B` RT GC): `BridgeCmd` `54/54` explicit opcodes + `Packaging` SSOT (`federation.json`), pure `MemoryBudgetGovernor` (`<=2600 MB` `REG-001`), generated `AppSettingsStore.Schema.cs` (`213` descriptors, `206` zero-reflection resets), & `RPE<->SBE` DSP parity ledger.
 3. **`W55.1b` & `W56.5` (`[DONE | DFP v2.23.0–v2.24.0]`):** Zero-Accumulation Monolith Ratchet (`+1L` on `>2,000L` = `FAIL`), 5-domain Compounding Learner (`BL|UI|ARCH|DSP|AI`), & Token-Tax Auto-Governor (`token_governor.py`, `SessionStart` diet, `PreInv` session dedup, doc token ratchet, `token-audit`, 1-shot `closeout`). *(H2+ stubs `W56.6–W56.8` integrate w/ `W55.3–W55.6`.)*
+4. **`W58` (`[DONE | DFP v2.25.0]` — `BP_HORIZONTAL_FINE_GRAIN_ORCHESTRATION.md`):** Horizontal Fine-Grain Subagent Orchestration — flat zero-coord `run_workflow` cubicles (`wave {schedule|fanout|stage1-3}`), `_WorkflowAstAuditor` (`model=`/`shell=False`/Termux `<=2`/multi-hop heavy), `is_termux_proot`, dead-PID reaper, HMAC `probes_sig` + sibling rollback, `domains.json` fix, & `8/8` `T0` canary (`116/116 --fast`).
+5. **`W59` (`[NEXT #0a]` | `BP_QA_V3_CHAOS_HEADROOM_AND_SCARLETT_DELTA.md` `ACTIVE [100/100]`):** Bug Hunter v3 Chaos / Inexperienced-User Stateful Simulator — deterministic `--seed`, fixed demo tracks (`1 FLAC + 1 Atmos`), mutual-exclusion snapshots, && crash-safe `QaFailClosedHttpHandler` MVSEP 0-credit block.
+6. **`W60` (`[NEXT #0b]` | `BP_QA_V3_CHAOS_HEADROOM_AND_SCARLETT_DELTA.md` `ACTIVE [100/100]`):** 50% Headroom Gate (`<=50%` RT CPU across 4 sites+C++, UI `P95<=4.16ms`/`<=6ms`, `<=550/1280MB` 6GB PSS) && unbroken-duplex Scarlett Gen4 loopback delta (`2x P10 Line Out->In1/2` vs `HP Out->In1/2 Y-cable` `--compare-cables`).
 
-### TRACK B | P0-HW — Physical S25U Live Validation (`[NEXT #1]` — Epoch 5 + `v2.9.102 B1-B7` + V3 + OmniAgent `v2.2.0`)
+### TRACK B | P0-HW — Stage 1 Bug-Fix, 50% Headroom & S25U Live Validation (`[NEXT #1 — AFTER TRACK A W58-W60]`)
 1. `W54-LiveVerify` (`BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP` + `BP_V4_REFORM_SPATIAL_AI_ONEUI9`): Install signed Epoch 5 CI APK (`W55.6`+`W57.4`+`v2.9.102 B1-B7`) + OmniAgent `v2.2.0` on S25U & run full `V1–V12 --strict-mode --gate` (`36` contracts; NPU/WebGPU/CPU benchmark).
 2. `W52` (`BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS.md`): Live S25U check of vocal stability, neural stem cache TTL/hit-rate, 120 Hz zero-jank (`EnableFullScreenRenderEffectBlur=false`), EBU R128 loudness match, & smooth volume ramp.
 3. `W2-LiveReverify` (`BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA.md` + `BP_LEGACY_CAVERN_CORE_AND_SUITE_PARITY` `W57.4`): Live Scarlett 2i2 Gen 4 USB-C duplex check (`<10 ms` RT mic duplex, 0 xruns, bit-exact headphone bypass, `QuickEQ` live sweep, hot-plug recovery).
 4. `CavernBugHunter v2` (`omni_agent.py hunt`): Clean 0-finding confirmation pass on live device.
+5. **Post-W58–W60 Execution Order (`SAVED_IDEAS.md` seeds -> SOTA Blueprint/stage; strict bug-first):** **Stage 1 (FIRST):** `v2.9.104` crash/stutter/blueprint-gap diag + Bug Hunter v3 Chaos + Scarlett delta -> fix ALL bugs & regressions to 0 findings & 50% Headroom PASS -> **Stage 2:** UX/HW Unification (MagLS/MinPhase/BRIR, Local+Cloud popover, smart BT/USB + XTC cm) -> **Stage 3:** Holistic `FLAC->Dolby Atmos` AI Cortex + Personal Serverless GPU MVSEP Graph.
 
 ### TRACK C | P1–P3 — CavernizeAndroid App Reform & Feature Waves (`W55.1–W55.6` & `W57.1–W57.4` ALL H1 DONE)
 - **P1 | V4 Master App Reform (`BP_V4_REFORM_SPATIAL_AI_ONEUI9.md`, `[DONE]` — Epoch 1–5):** `W55.1` (`V4.1` P0 fixes) -> `W55.2` (`V4.2` 3D motion/lyrics FX/ear-candy/off-UI) -> `W55.3` (`V4.3` `UiStateCoordinator`/XTC bypass/dedup) -> `W55.4` (`V4.4` 3-tab `Library|Sound|Export` + Mini-Player/NowPlaying + Gear, ALL 8 monoliths `<1,800L`) -> `W55.5` (`V4.5` `SecQSDetail` glass/gestures/drag) -> `W55.6` (`V4.6` Listening/Workspace Presets, JSON portability, SAF Remote Cache, audited MVSEP recipes, Hexagon V79 NPU + Adreno 830 WebGPU + ARM64 KleidiAI CPU Symbiosis).
@@ -48,14 +52,16 @@
 
 ## 4. Live Machine-Synced Inventory
 <!-- HUB:AUTO_START -->
-HUB_STATS|blueprints=9 (done=2, partial=6, active=0, deferred=1, superseded=0)|archived_done=12|min_score=100/100|open_conflicts=0|monoliths_gt2000=0
+HUB_STATS|blueprints=11 (done=3, partial=6, active=1, deferred=1, superseded=0)|archived_done=12|min_score=100/100|open_conflicts=0|monoliths_gt2000=0
 
 | Blueprint ID | Status | Score | Tier | H2+ Stubs | Hygiene / Lineage Note |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | `BP_ECOSYSTEM_COHERENCE_AND_SELF_GOVERNANCE` | `PARTIAL` | `100/100` | `T3` | `3` | ALL H1 Track A slices (`W56.1->W56.5`, `DFP v2.24.0`) DONE & verified: Zero-Accumulation Token-Tax & Side-Effe |
 | `BP_FULL_APP_SOTA_AUDIT` | `PARTIAL` | `100/100` | `T3` | `2` | W1-W3 DONE (T6); W4 monolith backlog updated to 5 files >2000L (added AndroidAudioOutput.cs 2157L); W5 speaker |
+| `BP_HORIZONTAL_FINE_GRAIN_ORCHESTRATION` | `DONE` | `100/100` | `T3` | `2` | W58.1-W58.6 DONE (DFP v2.25.0): flat zero-token horizontal run_workflow cubicles, AST guard, Termux PPK cap, 8 |
 | `BP_LEGACY_CAVERN_CORE_AND_SUITE_PARITY` | `DONE` | `100/100` | `T3` | `1` | ALL H1 slices (W57.1-W57.4) DONE & QA PASS (CRIT=0/HIGH=0); Track B S25U Scarlett sweep QA next |
 | `BP_OMNISCIENT_SPATIAL_OBJECT_CORTEX` | `DEFERRED` | `100/100` | `T3` | `2` | resolved=Phase-A W1-W3 shipped in T6; Phase-B W4 local INT4 LLM deferred & MUST execute in isolated :worker p |
+| `BP_QA_V3_CHAOS_HEADROOM_AND_SCARLETT_DELTA` | `ACTIVE` | `100/100` | `T3` | `2` | - |
 | `BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA` | `PARTIAL` | `100/100` | `T2` | `1` | W1 native/C# code DONE (v2.9.80); W2-LiveReverify physical Scarlett 2i2 Gen4 S25U test pending. |
 | `BP_TRACKB_LIVE_QA_REMEDIATION` | `PARTIAL` | `100/100` | `T2` | `0` | Code + CI parity verified for v2.9.104; awaiting live S25U Track B V1-V12 sign-off |
 | `BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP` | `PARTIAL` | `100/100` | `T3` | `1` | ALL H1 slices (`W53.0`, `W53.Q1–Q4`, `W53.1`, `W53.1b`, `W53.2`, `W53.3`, `W53.4`, `W53.5`, `W53.6`) DONE & CI |

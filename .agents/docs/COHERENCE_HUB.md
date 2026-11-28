@@ -16,11 +16,11 @@
 ## 2. DEPRECATED_REGISTRY (`WARN -> GRACE -> TOMBSTONE`)
 <!-- Format: DEP|<id>|<stage>|<path_or_surface>|<replacement>|owner=<owner>|expires_ver=<semver> -->
 DEP|legacy-live-phone-bridge|TOMBSTONE|.agents/scripts/live_phone_bridge.py|omni_agent.py cavernize-cmd|owner=cavern|expires_ver=2.22.0
-DEP|flight-recorder-recover-alias|GRACE|cli:flight_recorder.py recover|flight_recorder.py resume|owner=cavern|expires_ver=2.25.0
-DEP|legacy-error-learner-wrapper|WARN|.agents/scripts/error_learner.py|plan_tool.py learn|owner=dfp|expires_ver=2.25.0
+DEP|flight-recorder-recover-alias|GRACE|cli:flight_recorder.py recover|flight_recorder.py resume|owner=cavern|expires_ver=2.28.0
+DEP|legacy-error-learner-wrapper|GRACE|.agents/scripts/error_learner.py|plan_tool.py learn|owner=dfp|expires_ver=2.28.0
 
 ## 3. COVERAGE_MATRIX
-COV|plugin=v2.24.0|triage_domains=8|bp_domains=8|verify_checks=22|hooks=9(unwired=0)
+COV|plugin=v2.25.0|triage_domains=8|bp_domains=8|verify_checks=22|hooks=9(unwired=0)
 COV|host_matrix_strict=true|host_entries=12|auto_blocks=3(drifted=0)|deprecated=3
 
 ## 4. CROSS_REPO_PARITY
