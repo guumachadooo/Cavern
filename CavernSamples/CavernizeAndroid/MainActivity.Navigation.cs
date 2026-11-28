@@ -812,6 +812,9 @@ public partial class MainActivity {
         if (resultCode != Result.Ok || data == null) {
             return;
         }
+        if (TryHandleEpoch5ActivityResult(requestCode, resultCode, data)) {
+            return;
+        }
 
         if (requestCode == ReqOpenMedia && data.Data != null) {
             LoadUriAsync(data.Data);

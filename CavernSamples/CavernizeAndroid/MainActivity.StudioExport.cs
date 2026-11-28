@@ -427,6 +427,9 @@ public partial class MainActivity {
         });
 
         studioW12BatchBtn = PillButton(S["StudioW12BatchBtn"], ShowStudioW12BatchDialog);
+        studioW12BatchBtn.SetSingleLine(false);
+        studioW12BatchBtn.SetMaxLines(2);
+        studioW12BatchBtn.Ellipsize = null;
         card.AddView(studioW12BatchBtn, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
             ViewGroup.LayoutParams.WrapContent) {

@@ -359,5 +359,37 @@ public sealed partial class AndroidStrings {
         d["ToolMlpPresLabel"] = "MLP prezentáció";
         d["ToolMlpAuto"] = "Automatikus (Legjobb)";
         d["ToolExtractRawTrackBtn"] = "Aktív elemi sáv kinyerése (--extract)";
+        d["AiPickerShortBtn"] = "MI-modell választó";
+        d["StudioW12BatchStartBtn"] = "Köteg indítása";
+        d["PresetsSheetTitle"] = "Profilok és Hordozhatóság";
+        d["ListeningPresetsLabel"] = "Hallgatási profil";
+        d["WorkspacePresetsLabel"] = "Munkaterület elrendezés";
+        d["PresetAppliedFmt"] = "Profil alkalmazva: {0}";
+        d["PortableSettingsTitle"] = "Hordozható JSON mentés";
+        d["PortableExportBtn"] = "JSON exportálás";
+        d["PortableImportBtn"] = "JSON importálás";
+        d["PortableExportDoneFmt"] = "Exportálva: {0} ({1} titok eltávolítva)";
+        d["PortableImportDoneFmt"] = "Importálva: {0} beállítás ({1} profil)";
+        d["PortableImportFailToast"] = "JSON importálás sikertelen: {0}";
+        d["RemoteCacheTitle"] = "Felhő / Drive neurális gyorsítótár";
+        d["RemoteCachePickBtn"] = "Mappa választása";
+        d["RemoteCacheSyncBtn"] = "Szinkronizálás";
+        d["RemoteCacheAutoSwitch"] = "*.ntc sávok automatikus SAF szinkronja";
+        d["RemoteCacheNone"] = "Nincs SAF / Drive mappa kiválasztva";
+        d["RemoteCacheSyncedFmt"] = "Gyorsítótár: +{0} be, +{1} ki";
+        d["SymbiosisCapsLabel"] = "Gyorsító szimbiózis";
+        d["QuickEqTitle"] = "QuickEQ kalibráció";
+        d["QuickEqSub"] = "Többpontos Farina ESS mérés, FDW+ERB átlagolás és Cytomic SVF megoldó.";
+        d["QuickEqOpenBtn"] = "QuickEQ";
+        d["QuickEqTargetLabel"] = "Célgörbe";
+        d["QuickEqTakeSweepBtn"] = "Mérés indítása";
+        d["QuickEqSolveApplyBtn"] = "Számítás és Alkalmazás";
+        d["QuickEqClearTakesBtn"] = "Törlés";
+        d["QuickEqExportBtn"] = "Exportálás";
+        d["QuickEqStatusEmpty"] = "Még nincs mérés. Helyezze a mikrofont a hallgatási pontra, majd indítsa a mérést (1–5 pont).";
+        d["QuickEqTakeDoneFmt"] = "Pont {0}/{1}: SNR {2:0.0} dB · H2 {3:0.0} dB";
+        d["QuickEqAppliedFmt"] = "QuickEQ alkalmazva: {0} sáv · Előerősítés {1:+0.0;-0.0;0.0} dB";
+        d["QuickEqExportTitle"] = "QuickEQ korrekció exportálása";
+        d["QuickEqPointsBadgeFmt"] = "{0} / {1} mérési pont";
     }
 }

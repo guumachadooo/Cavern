@@ -205,15 +205,16 @@ public partial class MainActivity {
             Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(40, 255, 255, 255), 99f)
         };
         miniPlayerProgressFill = new View(this) {
-            Background = OneUiTheme.CreateRoundedDrawable(this, ColAccent, 99f)
+            Background = OneUiTheme.CreateRoundedDrawable(this, ColAccent, 99f),
+            PivotX = 0f,
+            ScaleX = 0f
         };
-        miniPlayerProgressTrack.AddView(miniPlayerProgressFill, new FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent));
+        miniPlayerProgressTrack.AddView(miniPlayerProgressFill, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
         outerCol.AddView(miniPlayerProgressTrack, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(2)) {
             TopMargin = Dp(5)
         });
 
         miniPlayerBarHost.AddView(outerCol, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        OneUiTheme.AttachRecoil(miniPlayerBarHost, 0.98f);
         miniPlayerBarHost.SetOnTouchListener(new MiniPlayerSwipeUpTouchListener(
             this,
             () => OpenNowPlayingSheet(subViewIndex: 0)));
@@ -237,6 +238,8 @@ public partial class MainActivity {
                     downRawY = e.RawY;
                     downTimeMs = e.EventTime;
                     draggingUp = false;
+                    v.Animate()?.Cancel();
+                    v.Animate().ScaleX(0.98f).ScaleY(0.98f).SetDuration(90).Start();
                     return true;
                 case MotionEventActions.Move: {
                     float dy = e.RawY - downRawY;
@@ -261,9 +264,11 @@ public partial class MainActivity {
                     bool isCleanTap = !draggingUp && MathF.Abs(dx) <= slop && MathF.Abs(dy) <= slop;
                     bool commitSwipe = draggingUp && (-dy >= owner.Dp(42) || velocityUpPxPerSec >= owner.Dp(420));
                     v.Animate()
+                        .ScaleX(1f)
+                        .ScaleY(1f)
                         .TranslationY(0f)
                         .Alpha(1f)
-                        .SetDuration(OneUiTheme.QsEditSettleMs)
+                        .SetDuration(260)
                         .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f))
                         .Start();
                     draggingUp = false;
@@ -274,7 +279,14 @@ public partial class MainActivity {
                 }
                 case MotionEventActions.Cancel:
                     draggingUp = false;
-                    v.Animate().TranslationY(0f).Alpha(1f).SetDuration(160).Start();
+                    v.Animate()
+                        .ScaleX(1f)
+                        .ScaleY(1f)
+                        .TranslationY(0f)
+                        .Alpha(1f)
+                        .SetDuration(260)
+                        .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f))
+                        .Start();
                     return true;
             }
             return false;
@@ -622,16 +634,10 @@ public partial class MainActivity {
                 miniPlayerPlayIcon.IconType = targetIcon;
             }
         }
-        if (miniPlayerProgressFill != null && miniPlayerProgressTrack != null) {
-            int trackW = miniPlayerProgressTrack.Width;
-            if (trackW > 0) {
-                double frac = totSeconds > 0.01 ? Math.Clamp(curSeconds / totSeconds, 0.0, 1.0) : 0.0;
-                int fillW = (int)Math.Round(trackW * frac);
-                if (miniPlayerProgressFill.LayoutParameters is FrameLayout.LayoutParams flp && flp.Width != fillW) {
-                    flp.Width = fillW;
-                    miniPlayerProgressFill.LayoutParameters = flp;
-                }
-            }
+        if (miniPlayerProgressFill != null) {
+            double frac = totSeconds > 0.01 ? Math.Clamp(curSeconds / totSeconds, 0.0, 1.0) : 0.0;
+            miniPlayerProgressFill.PivotX = 0f;
+            miniPlayerProgressFill.ScaleX = (float)frac;
         }
     }
 }

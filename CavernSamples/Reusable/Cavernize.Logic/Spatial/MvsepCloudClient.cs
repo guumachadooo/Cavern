@@ -229,6 +229,64 @@ public sealed class MvsepAlgorithmPreset {
         }
         return FindOrDefault(preferredPresetId);
     }
+
+    /// <summary>Audits all curated MVSEP REST presets and 2-stage karaoke cascades for invariant compliance.</summary>
+    public static MvsepRecipeAuditReport AuditCuratedRecipes() {
+        List<string> issues = [];
+        HashSet<string> seenIds = new(StringComparer.OrdinalIgnoreCase);
+        int validCount = 0;
+
+        if (KaraokeVocalsOnlyStage2 == null || string.IsNullOrWhiteSpace(KaraokeVocalsOnlyStage2.Id) ||
+            KaraokeVocalsOnlyStage2.SeparationType != 49 || !string.Equals(KaraokeVocalsOnlyStage2.Opt2, "0", StringComparison.Ordinal)) {
+            issues.Add("KaraokeVocalsOnlyStage2 must use sep_type=49 and add_opt2='0' ('Use as is').");
+        }
+
+        for (int i = 0; i < Presets.Count; i++) {
+            MvsepAlgorithmPreset p = Presets[i];
+            if (p == null) { issues.Add($"Preset index {i} is null."); continue; }
+            bool ok = true;
+            if (string.IsNullOrWhiteSpace(p.Id)) { issues.Add($"Preset index {i} has empty Id."); ok = false; }
+            else if (!seenIds.Add(p.Id.Trim())) { issues.Add($"Duplicate preset Id '{p.Id}'."); ok = false; }
+            else if (KaraokeVocalsOnlyStage2 != null && string.Equals(p.Id.Trim(), KaraokeVocalsOnlyStage2.Id, StringComparison.OrdinalIgnoreCase)) {
+                issues.Add($"Preset Id '{p.Id}' collides with Stage-2 preset."); ok = false;
+            }
+            if (string.IsNullOrWhiteSpace(p.DisplayName)) { issues.Add($"Preset '{p.Id}' has empty DisplayName."); ok = false; }
+            if (p.SeparationType <= 0) { issues.Add($"Preset '{p.Id}' has invalid SeparationType={p.SeparationType}."); ok = false; }
+            if (p.IsTwoStageCascade) {
+                MvsepAlgorithmPreset s2 = ResolveExactStage2(p.Stage2PresetId);
+                if (s2 == null) { issues.Add($"2-stage preset '{p.Id}' references missing Stage2PresetId '{p.Stage2PresetId}'."); ok = false; }
+                else if (s2.SeparationType != 49 || !string.Equals(s2.Opt2, "0", StringComparison.Ordinal)) {
+                    issues.Add($"2-stage preset '{p.Id}' Stage2 '{s2.Id}' must use sep_type=49 & Opt2='0'."); ok = false;
+                }
+            }
+            if (ok) validCount++;
+        }
+
+        return new MvsepRecipeAuditReport { TotalPresets = Presets.Count, ValidCount = validCount, Issues = issues };
+    }
+
+    static MvsepAlgorithmPreset ResolveExactStage2(string stage2Id) {
+        if (string.IsNullOrWhiteSpace(stage2Id)) return null;
+        string needle = stage2Id.Trim();
+        if (KaraokeVocalsOnlyStage2 != null && string.Equals(KaraokeVocalsOnlyStage2.Id, needle, StringComparison.OrdinalIgnoreCase))
+            return KaraokeVocalsOnlyStage2;
+        for (int i = 0; i < Presets.Count; i++) {
+            if (string.Equals(Presets[i]?.Id, needle, StringComparison.OrdinalIgnoreCase)) return Presets[i];
+        }
+        return null;
+    }
+}
+
+/// <summary>Integrity report returned by <see cref="MvsepAlgorithmPreset.AuditCuratedRecipes"/>.</summary>
+public sealed class MvsepRecipeAuditReport {
+    /// <summary>Total number of curated presets inspected.</summary>
+    public int TotalPresets { get; init; }
+    /// <summary>Number of presets passing all structural and 2-stage cascade checks.</summary>
+    public int ValidCount { get; init; }
+    /// <summary>Human-readable audit failures (empty when all curated recipes are valid).</summary>
+    public IReadOnlyList<string> Issues { get; init; } = Array.Empty<string>();
+    /// <summary>True when zero issues were detected across all curated presets.</summary>
+    public bool IsValid => Issues.Count == 0 && ValidCount == TotalPresets;
 }
 
 /// <summary>

@@ -359,5 +359,37 @@ public sealed partial class AndroidStrings {
         d["ToolMlpPresLabel"] = "MLP 呈现层";
         d["ToolMlpAuto"] = "自动（最佳可用）";
         d["ToolExtractRawTrackBtn"] = "提取当前基本流 (--extract)";
+        d["AiPickerShortBtn"] = "AI 模型选择";
+        d["StudioW12BatchStartBtn"] = "开始批量";
+        d["PresetsSheetTitle"] = "预设与便携备份";
+        d["ListeningPresetsLabel"] = "聆听预设";
+        d["WorkspacePresetsLabel"] = "工作区布局";
+        d["PresetAppliedFmt"] = "已应用预设：{0}";
+        d["PortableSettingsTitle"] = "便携 JSON 备份";
+        d["PortableExportBtn"] = "导出 JSON";
+        d["PortableImportBtn"] = "导入 JSON";
+        d["PortableExportDoneFmt"] = "已导出 {0}（已移除 {1} 项密钥）";
+        d["PortableImportDoneFmt"] = "已导入 {0} 项设置（{1} 预设）";
+        d["PortableImportFailToast"] = "便携 JSON 导入失败：{0}";
+        d["RemoteCacheTitle"] = "云端 / 网盘神经缓存";
+        d["RemoteCachePickBtn"] = "选择文件夹";
+        d["RemoteCacheSyncBtn"] = "立即同步";
+        d["RemoteCacheAutoSwitch"] = "自动通过 SAF 文件夹同步 *.ntc 分轨缓存";
+        d["RemoteCacheNone"] = "未选择 SAF / 网盘文件夹";
+        d["RemoteCacheSyncedFmt"] = "缓存同步：+{0} 导入，+{1} 导出";
+        d["SymbiosisCapsLabel"] = "加速器共生状态";
+        d["QuickEqTitle"] = "QuickEQ 房间校准";
+        d["QuickEqSub"] = "多点 Farina ESS 扫频、FDW+ERB 空间平均与 Cytomic SVF 求解器。";
+        d["QuickEqOpenBtn"] = "QuickEQ";
+        d["QuickEqTargetLabel"] = "目标曲线";
+        d["QuickEqTakeSweepBtn"] = "采集扫频";
+        d["QuickEqSolveApplyBtn"] = "求解并应用";
+        d["QuickEqClearTakesBtn"] = "清除";
+        d["QuickEqExportBtn"] = "导出";
+        d["QuickEqStatusEmpty"] = "尚无测量数据。请将麦克风置于聆听位置并点击“采集扫频”（1–5 点）。";
+        d["QuickEqTakeDoneFmt"] = "测量点 {0}/{1}：SNR {2:0.0} dB · H2 {3:0.0} dB";
+        d["QuickEqAppliedFmt"] = "已应用 QuickEQ：{0} 频段 · 前级 {1:+0.0;-0.0;0.0} dB";
+        d["QuickEqExportTitle"] = "导出 QuickEQ 校正曲线";
+        d["QuickEqPointsBadgeFmt"] = "已采集 {0} / {1} 个点";
     }
 }

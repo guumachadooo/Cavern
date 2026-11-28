@@ -827,6 +827,226 @@
           "message": "AudioDefinitionModel.ValidateBs2076_2() must remain intact for Export -> Tools"
         }
       ]
+    },
+    {
+      "id": "REG-V4-007-PRESETS-JSON-SECRET-STRIP",
+      "bug_ref": "W55.6",
+      "title": "Strip all API tokens and secrets from portable JSON preset export/import and keep curated MVSEP recipes audited",
+      "domain": "ai-ml",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T58",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/ListeningPresetCatalog.cs",
+          "pattern": "public\\s+static\\s+bool\\s+TryDeserializePortableJson\\s*\\(",
+          "message": "ListeningPresetCatalog.TryDeserializePortableJson must remain intact for secret-free portable JSON"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/ListeningPresetCatalog.cs",
+          "pattern": "public\\s+static\\s+bool\\s+IsBlockedSecretKey\\s*\\(",
+          "message": "ListeningPresetCatalog.IsBlockedSecretKey must block all token/secret/key fields"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/MvsepCloudClient.cs",
+          "pattern": "public\\s+static\\s+MvsepRecipeAuditReport\\s+AuditCuratedRecipes\\s*\\(",
+          "message": "MvsepAlgorithmPreset.AuditCuratedRecipes must remain intact"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-008-HETEROGENEOUS-PSS-AND-SDR",
+      "bug_ref": "W55.6",
+      "title": "Enforce HeterogeneousAcceleratorRouter <=2600 MB PSS admission cap and <=0.3 dB SDR quantization/routing parity",
+      "domain": "ai-ml",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T58",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/HeterogeneousAcceleratorRouter.cs",
+          "pattern": "public\\s+const\\s+double\\s+MaxAllowedSdrLossDb\\s*=\\s*0\\.3;",
+          "message": "HeterogeneousAcceleratorRouter.MaxAllowedSdrLossDb must stay <= 0.3 dB"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/HeterogeneousAcceleratorRouter.cs",
+          "pattern": "MemoryBudgetGovernor\\.HardSingleProcessPssCeilingBytes",
+          "message": "HeterogeneousAcceleratorRouter must enforce MemoryBudgetGovernor.HardSingleProcessPssCeilingBytes"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/HeterogeneousAcceleratorRouter.cs",
+          "pattern": "public\\s+static\\s+bool\\s+ValidateSdrParity\\s*\\(",
+          "message": "HeterogeneousAcceleratorRouter.ValidateSdrParity must remain intact"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-009-QUICKEQ-ESS-AND-HF-BOOST-CAP",
+      "bug_ref": "W57.4/KILL|R4",
+      "title": "Enforce QuickEQ Farina ESS deconvolution, <= +6.0 dB high-frequency boost safety cap, and strict C# 8.0 compliance",
+      "domain": "dsp-format",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T59+PY_T19",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "Cavern/ProAudio/QuickEqSweepEngine.cs",
+          "pattern": "public\\s+const\\s+double\\s+HardMaxBoostDb\\s*=\\s*6\\.0;",
+          "message": "QuickEqSweepEngine.HardMaxBoostDb must remain capped at 6.0 dB (KILL|R4)"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "Cavern/ProAudio/QuickEqSweepEngine.cs",
+          "pattern": "EnforceCompositeHighFreqBoostGuard\\s*\\(",
+          "message": "QuickEqSweepEngine must invoke EnforceCompositeHighFreqBoostGuard"
+        },
+        {
+          "kind": "file_forbids_regex",
+          "path": "Cavern/ProAudio/QuickEqSweepEngine.cs",
+          "pattern": "\\sis\\s+not\\s+|namespace\\s+Cavern\\.ProAudio;|=\\s*new\\(",
+          "message": "QuickEqSweepEngine.cs must adhere to strict C# 8.0"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-010-V29102-LIVE-BUGS-B1-B7",
+      "bug_ref": "B1-B7/v2.9.102",
+      "title": "Freeze v2.9.102 live-bug fixes B1-B7 (log version boundary, SelfAudit scale/EditText/tab1, GPU ScaleX mini-player, speaker route guard, LiveBridge tab map, OnTrimMemory thumb cache)",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:PY_T19",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/SelfDiagnosticEngine.cs",
+          "pattern": "firstLatestIdx",
+          "message": "B1: SelfDiagnosticEngine.CheckRuntimeLogHealth must use firstLatestIdx"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.SelfAudit.cs",
+          "pattern": "EnsureTabLaidOut\\(1\\)",
+          "message": "B2: MainActivity.SelfAudit.cs must call EnsureTabLaidOut(1)"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.SelfAudit.cs",
+          "pattern": "cumScaleX[\\s\\S]*?nextScaleX",
+          "message": "B2: MainActivity.SelfAudit.cs must track cumScaleX/nextScaleX during view tree audit"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.SelfAudit.cs",
+          "pattern": "v\\s+is\\s+not\\s+EditText",
+          "message": "B2: MainActivity.SelfAudit.cs must exclude EditText from hard-clipped text check"
+        },
+        {
+          "kind": "file_forbids_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.SelfAudit.cs",
+          "pattern": "EnsureTabLaidOut\\(4\\)",
+          "message": "B2: MainActivity.SelfAudit.cs must not call obsolete EnsureTabLaidOut(4)"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.NowPlayingSheet.cs",
+          "pattern": "miniPlayerProgressFill\\.ScaleX",
+          "message": "B3: RefreshMiniPlayerPlaybackUi must animate progress via GPU ScaleX"
+        },
+        {
+          "kind": "file_forbids_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.NowPlayingSheet.cs",
+          "pattern": "miniPlayerProgressFill\\.LayoutParameters\\s*=",
+          "message": "B3: RefreshMiniPlayerPlaybackUi must not trigger relayout via LayoutParameters"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/AudioDeviceProfileManager.cs",
+          "pattern": "ApplyStoredBinding[\\s\\S]*?!device\\.IsHeadphoneRoute",
+          "message": "B4: AudioDeviceProfileManager.ApplyStoredBinding must guard on !device.IsHeadphoneRoute"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.LiveBridge.cs",
+          "pattern": "\"library\"[\\s\\S]*?\"sound\"[\\s\\S]*?\"export\"",
+          "message": "B5: MainActivity.LiveBridge.cs must map library/sound/export to tabs 0/1/2"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.cs",
+          "pattern": "OnTrimMemory[\\s\\S]*?InvalidateThumbCache",
+          "message": "B6/B7: MainActivity.OnTrimMemory must clear thumbnail cache via InvalidateThumbCache"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-011-QA-DESTROYER-EPOCH5-REMEDIATION",
+      "bug_ref": "QA-Destroyer/Epoch5",
+      "title": "Enforce live DSP engine sync on Preset/JSON import, QuickEQ sweep SR alignment + AudioRecord Stop-before-Join, MediaStore PublishToDownloads, and SelfAudit modal parity",
+      "domain": "dsp-ui",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:PY_T19",
+      "added_date": "2026-11-28",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.PresetsAndSymbiosis.cs",
+          "pattern": "ApplyListeningPreset[\\s\\S]*?SyncFullStoreToLiveEngines\\(includeBinauralAndAutoEq:\\s*false\\)[\\s\\S]*?ApplyImportedPortableSnapshot[\\s\\S]*?SyncFullStoreToLiveEngines\\(includeBinauralAndAutoEq:\\s*true\\)",
+          "message": "Presets and imported JSON snapshots must push all settings directly to live playerEngine"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.PresetsAndSymbiosis.cs",
+          "pattern": "await\\s+engine\\.ApplyUpmixingSettingsAsync[\\s\\S]*?await\\s+engine\\.ApplyNeuralConfigAsync",
+          "message": "SyncFullStoreToLiveEngines must await ApplyUpmixingSettingsAsync before ApplyNeuralConfigAsync to prevent pipelineConfigGen cancellation"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/QuickEqCalibrationService.cs",
+          "pattern": "ActiveCaptureSampleRate[\\s\\S]*?mic\\.SampleRate,\\s*44100,\\s*192000[\\s\\S]*?EnsureStudioRecordingCapture\\(true,\\s*sr\\)[\\s\\S]*?localRec\\.Stop\\(\\);[\\s\\S]*?localRecThread\\?\\.Join\\(500\\)",
+          "message": "QuickEqCalibrationService must preserve >48kHz active bridge SR, align fallback SR, and Stop() AudioRecord before Join()"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/QuickEqCalibrationService.cs",
+          "pattern": "AndroidFileHelper\\.PublishToDownloads\\(",
+          "message": "QuickEqCalibrationService.ExportToFile must publish via AndroidFileHelper.PublishToDownloads"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.QuickEq.cs",
+          "pattern": "store\\.FilterStudioNyquistMatched\\s*=\\s*playerEngine\\?\\.FilterStudioStage\\?\\.NyquistMatched",
+          "message": "QuickEQ apply must persist FilterStudioNyquistMatched into store"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.SelfAudit.cs",
+          "pattern": "PresetsAndPortability[\\s\\S]*?QuickEqCalibration",
+          "message": "SelfAudit L9 modals[] must include PresetsAndPortability and QuickEqCalibration"
+        }
+      ]
     }
   ]
 }

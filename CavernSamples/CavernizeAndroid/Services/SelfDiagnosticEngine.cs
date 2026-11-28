@@ -1125,11 +1125,21 @@ public static class SelfDiagnosticEngine {
         string[] lines = string.IsNullOrEmpty(recent) ? [] : recent.Split('\n');
 
         string latestVersion = null;
+        int firstLatestIdx = -1;
         for (int i = lines.Length - 1; i >= 0; i--) {
             string ver = TryExtractLogSessionVersion(lines[i]);
             if (ver != null) {
                 latestVersion = ver;
                 break;
+            }
+        }
+        if (latestVersion != null) {
+            for (int i = 0; i < lines.Length; i++) {
+                string ver = TryExtractLogSessionVersion(lines[i]);
+                if (ver != null && string.Equals(ver, latestVersion, StringComparison.OrdinalIgnoreCase)) {
+                    firstLatestIdx = i;
+                    break;
+                }
             }
         }
 
@@ -1138,8 +1148,8 @@ public static class SelfDiagnosticEngine {
         List<string> priorVersionFatals = [];
         string activeVersion = null;
 
-        foreach (string raw in lines) {
-            string ln = raw.Trim();
+        for (int i = 0; i < lines.Length; i++) {
+            string ln = lines[i].Trim();
             if (string.IsNullOrEmpty(ln)) {
                 continue;
             }
@@ -1153,9 +1163,9 @@ public static class SelfDiagnosticEngine {
                 ln.Contains("SelfCheck WARN", StringComparison.Ordinal)) {
                 continue;
             }
-            bool isPriorVersion = latestVersion != null &&
-                                  activeVersion != null &&
-                                  !string.Equals(activeVersion, latestVersion, StringComparison.OrdinalIgnoreCase);
+            bool isPriorVersion = (firstLatestIdx >= 0 && i < firstLatestIdx) ||
+                                  (latestVersion != null && activeVersion != null &&
+                                   !string.Equals(activeVersion, latestVersion, StringComparison.OrdinalIgnoreCase));
             if (ln.Contains("[FATAL]", StringComparison.Ordinal) || ln.Contains("SIGSEGV", StringComparison.Ordinal)) {
                 string snippet = ln.Length > 95 ? ln[..95] + "..." : ln;
                 if (isPriorVersion) {

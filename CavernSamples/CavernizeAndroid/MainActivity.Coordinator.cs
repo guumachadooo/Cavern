@@ -381,6 +381,13 @@ public partial class MainActivity {
         };
     }
 
+    static string TruncateAiPickerLabel(string text) {
+        if (string.IsNullOrEmpty(text)) {
+            return string.Empty;
+        }
+        return text.Length <= 28 ? text : text[..27] + "…";
+    }
+
     string BuildActiveAiPickerSummaryText() {
         if (store == null) {
             return string.Empty;
@@ -388,8 +395,7 @@ public partial class MainActivity {
         NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
         if (cfg.ExecutionBackend == NeuralExecutionBackend.MvsepCloud) {
             MvsepAlgorithmPreset preset = MvsepAlgorithmPreset.FindOrDefault(store.MvsepPresetId);
-            string stems = string.Join(" · ", GetMvsepPresetStemMap(preset));
-            return $"{S["AiPickerCloudIsolatedTag"]}: {preset.DisplayName} ({stems})";
+            return TruncateAiPickerLabel($"{S["AiPickerCloudIsolatedTag"]}: {preset.DisplayName}");
         }
         if (cfg.OrchestrationMode == NeuralOrchestrationMode.Manual) {
             NeuralModelCatalogEntry entry =
@@ -397,10 +403,7 @@ public partial class MainActivity {
                     .FirstOrDefault(m => string.Equals(m.Id, cfg.ActiveStemModelId, StringComparison.OrdinalIgnoreCase)) ??
                 NeuralModelCatalog.FindById(cfg.ActiveStemModelId);
             if (entry != null) {
-                IReadOnlyList<string> stemsArr = entry.OutputStemNames != null && entry.OutputStemNames.Length > 0
-                    ? entry.OutputStemNames
-                    : NeuralModelCatalog.GetDefaultOutputStemNames(entry.Task);
-                return $"{S["AiPickerManualIsolatedTag"]}: {entry.DisplayName} ({string.Join(" · ", stemsArr)})";
+                return TruncateAiPickerLabel($"{S["AiPickerManualIsolatedTag"]}: {entry.DisplayName}");
             }
         }
         string bundleTag = Math.Clamp(store.NeuralStudioBundleIndex, 0, 4) switch {
@@ -410,7 +413,7 @@ public partial class MainActivity {
             4 => S["StudioBundleKaraoke2Stage"],
             _ => S["StudioBundleFastSingle"]
         };
-        return $"{S["AiPickerAutoBundleTag"]}: {bundleTag}";
+        return TruncateAiPickerLabel($"{S["AiPickerAutoBundleTag"]}: {bundleTag}");
     }
 
     void ShowUnifiedAiModelPickerDialog(Action onApplied = null) {

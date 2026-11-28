@@ -8,14 +8,15 @@ using Android.Widget;
 
 using CavernizeAndroid.Language;
 using CavernizeAndroid.Services;
+using CavernizeAndroid.Theme;
 using CavernizeAndroid.Views;
 
 namespace CavernizeAndroid;
 
 /// <summary>
 /// Live UI, Modal, Interactive Control &amp; Choreographer Latency/Frame-Jank Self-Audit Engine
-/// (Layers L8, L9, L10, L12 of <see cref="SelfDiagnosticEngine"/>). Walks all 5 tabs, 6 Settings categories,
-/// 27 real modals, and live interactive controls on the Android UI thread while sampling real Android
+/// (Layers L8, L9, L10, L12 of <see cref="SelfDiagnosticEngine"/>). Walks all 3 tabs, 4 Sound categories,
+/// NowPlaying sheet sub-views, 27 real modals, and live interactive controls on the Android UI thread while sampling real Android
 /// <see cref="Choreographer"/> vsync frames to catch main-thread stalls, slow screen opens, dropped frames,
 /// text/NaN leaks, and layout defects, then cleanly restores the user's exact navigation state.
 /// </summary>
@@ -86,10 +87,11 @@ public partial class MainActivity {
     }
 
     static (string tier, int warnBudgetMs, int stallFailMs) GetUiPerfBudget(string targetName) {
-        if (targetName is "Tab1:3DRoom" or "Modal:AutoEqProfileSelector") {
+        if (targetName is "NowPlaying:3DStage" or "Modal:AutoEqProfileSelector") {
             return ("Heavy", 350, 800);
         }
-        if (targetName is "Tab0:Player" ||
+        if (targetName is "Tab0:Library" or "Tab1:Sound" or "Tab2:Export" ||
+            targetName.StartsWith("NowPlaying:", StringComparison.Ordinal) ||
             targetName.StartsWith("SettingsCat", StringComparison.Ordinal) ||
             targetName is "Modal:BinauralProfileSelector" or "Modal:PerceptualHrtfWizard" or "Modal:NeuralModels"
                 or "Modal:AutoVocalMixMatch" or "Modal:Scarlett2i2Controls" or "Modal:StudioBatch"
@@ -182,17 +184,31 @@ public partial class MainActivity {
         }
 
         // Snapshot user navigation state so everything restores identically in finally
-        (int savedTab, int savedCat, bool savedPro, string savedSearch) = await RunOnUiThreadWithTimeoutAsync(() =>
-            (activeTab, activeSettingsCategory, isSettingsProMode, settingsSearchQuery ?? ""), 4000).ConfigureAwait(false);
+        (int savedTab, int savedCat, bool savedPro, string savedSearch, bool savedNowPlaying, int savedNowPlayingSub) =
+            await RunOnUiThreadWithTimeoutAsync(() =>
+                (activeTab, activeSettingsCategory, isSettingsProMode, settingsSearchQuery ?? "", isNowPlayingSheetOpen, activeNowPlayingSubView), 4000).ConfigureAwait(false);
 
         isRunningUiSelfAudit = true;
         int vsyncSampledCount = 0;
         try {
-            // ==================== L8: 5 TABS + 6 SETTINGS CATEGORIES GEOMETRY, TEXT & LATENCY AUDIT ====================
+            // ==================== L8: 3 TABS + 4 SOUND CATEGORIES + NOW PLAYING SHEET GEOMETRY, TEXT & LATENCY AUDIT ====================
             ct.ThrowIfCancellationRequested();
-            onProgress?.Invoke("L8/L12: Auditing 5 Tabs & 6 Settings Categories + Choreographer Latency");
+            onProgress?.Invoke("L8/L12: Auditing 3 Tabs & 4 Sound Categories + Choreographer Latency");
             Stopwatch swL8 = Stopwatch.StartNew();
             UiAuditAccumulator accL8 = new();
+
+            await RunOnUiThreadWithTimeoutAsync(() => {
+                CloseNowPlayingSheet();
+                if (nowPlayingSheetHost != null) {
+                    nowPlayingSheetHost.Animate()?.Cancel();
+                    OneUiMotionBlur.ClearMotionBlur(nowPlayingSheetHost);
+                    OneUiMotionBlur.ClearHardwareLayer(nowPlayingSheetHost);
+                    nowPlayingSheetHost.Visibility = ViewStates.Gone;
+                    nowPlayingSheetHost.TranslationY = 0f;
+                    nowPlayingSheetHost.Alpha = 1f;
+                }
+                return true;
+            }, 4000).ConfigureAwait(false);
 
             string[] tabLabels = ["Tab0:Library", "Tab1:Sound", "Tab2:Export"];
             for (int t = 0; t < tabLabels.Length; t++) {
@@ -216,7 +232,7 @@ public partial class MainActivity {
                 }, 4000).ConfigureAwait(false);
             }
 
-            // Walk all 6 Settings categories in Pro mode so every hidden/pro card is audited too
+            // Walk all 4 Sound categories in Pro mode so every hidden/pro card is audited too
             await RunOnUiThreadWithTimeoutAsync(() => {
                 SwitchTab(1);
                 SetSettingsProMode(true);
@@ -235,11 +251,55 @@ public partial class MainActivity {
                 perfSamples.Add(perf);
 
                 await RunOnUiThreadWithTimeoutAsync(() => {
-                    EnsureTabLaidOut(4);
+                    EnsureTabLaidOut(1);
                     AuditViewTree((View)settingsCardsContainer ?? rootFrameHost, catLabel, accL8, checkZeroSize: true);
                     return true;
                 }, 4000).ConfigureAwait(false);
             }
+
+            string[] nowPlayingSubLabels = ["NowPlaying:Cover", "NowPlaying:Lyrics", "NowPlaying:3DStage"];
+            for (int sub = 0; sub < nowPlayingSubLabels.Length; sub++) {
+                ct.ThrowIfCancellationRequested();
+                int subIdx = sub;
+                (UiPerfSample perf, bool vsyncOk) = await MeasureUiTransitionAsync(nowPlayingSubLabels[subIdx], () => {
+                    OpenNowPlayingSheet(subIdx);
+                }, ct).ConfigureAwait(false);
+                if (vsyncOk) vsyncSampledCount++;
+                perfSamples.Add(perf);
+
+                await RunOnUiThreadWithTimeoutAsync(() => {
+                    if (nowPlayingSheetHost != null) {
+                        SettleViewSubtreeAnimations(nowPlayingSheetHost, 0);
+                        nowPlayingSheetHost.TranslationY = 0f;
+                        EnsureRootLaidOut();
+                        if (nowPlayingSheetHost.Width <= 0 || nowPlayingSheetHost.Height <= 0 || nowPlayingSheetHost.IsLayoutRequested) {
+                            int w = rootFrameHost?.Width ?? (Resources?.DisplayMetrics?.WidthPixels ?? 1080);
+                            int h = rootFrameHost?.Height ?? (Resources?.DisplayMetrics?.HeightPixels ?? 2400);
+                            if (w > 0 && h > 0) {
+                                nowPlayingSheetHost.Measure(
+                                    View.MeasureSpec.MakeMeasureSpec(w, MeasureSpecMode.Exactly),
+                                    View.MeasureSpec.MakeMeasureSpec(h, MeasureSpecMode.Exactly));
+                                nowPlayingSheetHost.Layout(0, 0, w, h);
+                            }
+                        }
+                        AuditViewTree(nowPlayingSheetHost, nowPlayingSubLabels[subIdx], accL8, checkZeroSize: true);
+                    }
+                    return true;
+                }, 4000).ConfigureAwait(false);
+            }
+
+            await RunOnUiThreadWithTimeoutAsync(() => {
+                CloseNowPlayingSheet();
+                if (nowPlayingSheetHost != null) {
+                    nowPlayingSheetHost.Animate()?.Cancel();
+                    OneUiMotionBlur.ClearMotionBlur(nowPlayingSheetHost);
+                    OneUiMotionBlur.ClearHardwareLayer(nowPlayingSheetHost);
+                    nowPlayingSheetHost.Visibility = ViewStates.Gone;
+                    nowPlayingSheetHost.TranslationY = 0f;
+                    nowPlayingSheetHost.Alpha = 1f;
+                }
+                return true;
+            }, 4000).ConfigureAwait(false);
             swL8.Stop();
 
             SelfCheckStatus stL8 = accL8.Failures.Count > 0
@@ -249,11 +309,11 @@ public partial class MainActivity {
                 ? $"{accL8.Failures.Count} UI defect(s), {accL8.Warnings.Count} warn(s) across {accL8.ViewsInspected} views: {string.Join("; ", accL8.Failures.Take(8))}"
                 : (accL8.Warnings.Count > 0
                     ? $"0 fatal UI defects, {accL8.Warnings.Count} layout/click warn(s) across {accL8.ViewsInspected} views: {string.Join("; ", accL8.Warnings.Take(8))}"
-                    : $"All 5 tabs + 6 Settings categories clean ({accL8.ViewsInspected} views, {accL8.ButtonsInspected} buttons, {accL8.SelectorsInspected} selectors, 0 NaN/leaks/clipping)");
+                    : $"All 3 tabs + 4 Sound categories clean ({accL8.ViewsInspected} views, {accL8.ButtonsInspected} buttons, {accL8.SelectorsInspected} selectors, 0 NaN/leaks/clipping)");
             results.Add(new SelfCheckItem {
                 Id = "ui.tabs_and_settings",
                 Layer = "L8-LiveUI",
-                Name = "5 Tabs & 6 Settings Categories Audit",
+                Name = "3 Tabs & 4 Sound Categories Audit",
                 Status = stL8,
                 ElapsedMs = swL8.ElapsedMilliseconds,
                 Details = detL8
@@ -292,7 +352,9 @@ public partial class MainActivity {
                 ("OnlineMetadata", ShowOnlineMetadataDialog),
                 ("Subtitles", ShowSubtitlesDialog),
                 ("TrackSelector", ShowTrackSelectorDialog),
-                ("TechnicalStream", ShowTechnicalStreamDialog)
+                ("TechnicalStream", ShowTechnicalStreamDialog),
+                ("PresetsAndPortability", ShowPresetsAndPortabilityModal),
+                ("QuickEqCalibration", ShowQuickEqCalibrationDialog)
             ];
 
             int openedCount = 0;
@@ -485,6 +547,11 @@ public partial class MainActivity {
                     }
                     OpenSettingsCategory(savedCat);
                     SwitchTab(savedTab);
+                    if (savedNowPlaying) {
+                        OpenNowPlayingSheet(savedNowPlayingSub);
+                    } else {
+                        CloseNowPlayingSheet();
+                    }
                     RefreshLogSummaryLabel();
                     return true;
                 }, 4000).ConfigureAwait(false);
@@ -515,7 +582,7 @@ public partial class MainActivity {
             ? tabContainers[activeTab]
             : null;
 
-        void Walk(View v, int depth, bool inHScroll, bool inVScroll, int parentLeft, int parentRight) {
+        void Walk(View v, int depth, bool inHScroll, bool inVScroll, int parentLeft, int parentRight, float cumScaleX) {
             if (v == null || depth > 24 || v.Visibility != ViewStates.Visible) {
                 return;
             }
@@ -528,11 +595,13 @@ public partial class MainActivity {
             }
             acc.ViewsInspected++;
 
+            float nextScaleX = cumScaleX * (float.IsFinite(v.ScaleX) && v.ScaleX > 0.01f ? v.ScaleX : 1f);
             v.GetLocationOnScreen(loc);
             int vx = loc[0];
             int vy = loc[1];
             int vw = v.Width;
             int vh = v.Height;
+            int scaledW = vw > 0 ? Math.Max(0, (int)Math.Round(vw * nextScaleX)) : 0;
 
             if (v is OneUiInlineSelector) {
                 acc.SelectorsInspected++;
@@ -540,7 +609,7 @@ public partial class MainActivity {
 
             // Horizontal overflow outside HorizontalScrollView (catches clipped transport/action buttons)
             if (!inHScroll && vw > 0 && vh > 0 && rootW > 0) {
-                int vRight = vx + vw;
+                int vRight = vx + scaledW;
                 if (vRight > rootRight + overflowTolPx || vx < rootLeft - overflowTolPx) {
                     string label = v is TextView tvOv ? TruncateAuditText(tvOv.Text) : v.GetType().Name;
                     acc.Failures.Add($"{scopeName}: horizontal screen overflow on {v.GetType().Name} '{label}' (x={vx}, right={vRight}, rootRight={rootRight})");
@@ -573,7 +642,7 @@ public partial class MainActivity {
                         acc.Warnings.Add($"{scopeName}: zero-size visible TextView '{TruncateAuditText(txt)}'");
                     }
                     // Check hard-clipped single-line TextView without ellipsize
-                    if (vw > 0 && tv.MaxLines == 1 && tv.Ellipsize == null && tv.Paint != null) {
+                    if (vw > 0 && tv.MaxLines == 1 && tv.Ellipsize == null && v is not EditText && tv.Paint != null) {
                         float meas = tv.Paint.MeasureText(txt) + tv.CompoundPaddingLeft + tv.CompoundPaddingRight;
                         if (float.IsFinite(meas) && meas > vw + hardClipTolPx) {
                             acc.Warnings.Add($"{scopeName}: hard-clipped text in {v.GetType().Name} '{TruncateAuditText(txt)}' (meas={(int)Math.Ceiling(meas)}px > w={vw}px)");
@@ -662,14 +731,14 @@ public partial class MainActivity {
                 bool nextHScroll = inHScroll || v is HorizontalScrollView;
                 bool nextVScroll = inVScroll || v is ScrollView || v is AbsListView;
                 int nextPLeft = vw > 0 ? vx : parentLeft;
-                int nextPRight = vw > 0 ? vx + vw : parentRight;
+                int nextPRight = scaledW > 0 ? vx + scaledW : parentRight;
                 for (int i = 0; i < vg.ChildCount; i++) {
-                    Walk(vg.GetChildAt(i), depth + 1, nextHScroll, nextVScroll, nextPLeft, nextPRight);
+                    Walk(vg.GetChildAt(i), depth + 1, nextHScroll, nextVScroll, nextPLeft, nextPRight, nextScaleX);
                 }
             }
         }
 
-        Walk(root, 0, inHScroll: false, inVScroll: false, parentLeft: rootLeft, parentRight: rootRight);
+        Walk(root, 0, inHScroll: false, inVScroll: false, parentLeft: rootLeft, parentRight: rootRight, cumScaleX: 1f);
     }
 
     static string TruncateAuditText(string s) {

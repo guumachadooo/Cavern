@@ -816,4 +816,179 @@ public sealed class NeuralTrackCacheService : INeuralTrackCache {
             }
         } catch { }
     }
+
+    sealed record SafTreeDocEntry(string Name, Android.Net.Uri Uri, long SizeBytes, long LastModifiedMs);
+
+    /// <summary>Exports newer or missing local <c>*.ntc</c> bundles to a SAF / Google Drive document tree URI.</summary>
+    public Task<RemoteSafCacheSyncResult> ExportToSafTreeAsync(Context ctx, Android.Net.Uri treeUri, CancellationToken ct = default) =>
+        Task.Run(async () => {
+            if (!TryResolveSafTree(ctx, treeUri, out ContentResolver cr, out string rootDocId, out Android.Net.Uri parentDocUri))
+                return new RemoteSafCacheSyncResult { ErrorCount = 1, Summary = "Invalid SAF tree URI or ContentResolver." };
+            List<(string Path, string Name, long Length, long MtimeMs)> locals = SnapshotLocalCacheFiles();
+            Dictionary<string, SafTreeDocEntry> remotes = QueryRemoteNtcEntries(cr, treeUri, rootDocId, ct);
+            int exported = 0, skipped = 0, errors = 0; long bytes = 0L;
+
+            for (int i = 0; i < locals.Count; i++) {
+                ct.ThrowIfCancellationRequested();
+                (string localPath, string name, long len, long mtimeMs) = locals[i];
+                if (len <= 0L || !IOFile.Exists(localPath)) continue;
+                if (remotes.TryGetValue(name, out SafTreeDocEntry existing) &&
+                    existing.SizeBytes == len && existing.LastModifiedMs >= mtimeMs - 2000L) { skipped++; continue; }
+                try {
+                    Stream dst = null;
+                    if (existing?.Uri != null) {
+                        try { dst = cr.OpenOutputStream(existing.Uri, "wt"); } catch { dst = null; }
+                        if (dst == null) { try { Android.Provider.DocumentsContract.DeleteDocument(cr, existing.Uri); } catch { } }
+                    }
+                    if (dst == null) {
+                        Android.Net.Uri created = Android.Provider.DocumentsContract.CreateDocument(cr, parentDocUri, "application/octet-stream", name);
+                        if (created == null) { errors++; continue; }
+                        dst = cr.OpenOutputStream(created, "w");
+                    }
+                    if (dst == null) { errors++; continue; }
+                    await using (dst)
+                    await using (FileStream src = new(localPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true)) {
+                        await src.CopyToAsync(dst, 81920, ct).ConfigureAwait(false);
+                        await dst.FlushAsync(ct).ConfigureAwait(false);
+                    }
+                    exported++; bytes += len;
+                } catch (System.OperationCanceledException) { throw; }
+                catch (Exception ex) { errors++; AppLogger.Warn($"SAF neural cache export failed ({name}): {ex.Message}"); }
+            }
+            return new RemoteSafCacheSyncResult {
+                ExportedCount = exported, SkippedCount = skipped, ErrorCount = errors, BytesTransferred = bytes,
+                Summary = $"Exported {exported}, skipped {skipped}, errors {errors}"
+            };
+        }, ct);
+
+    /// <summary>Imports newer or missing <c>*.ntc</c> bundles from a SAF / Google Drive tree URI into local Slot 7B cache.</summary>
+    public Task<RemoteSafCacheSyncResult> ImportFromSafTreeAsync(Context ctx, Android.Net.Uri treeUri, CancellationToken ct = default) =>
+        Task.Run(async () => {
+            if (!TryResolveSafTree(ctx, treeUri, out ContentResolver cr, out string rootDocId, out _))
+                return new RemoteSafCacheSyncResult { ErrorCount = 1, Summary = "Invalid SAF tree URI or ContentResolver." };
+            Dictionary<string, SafTreeDocEntry> remotes = QueryRemoteNtcEntries(cr, treeUri, rootDocId, ct);
+            int imported = 0, skipped = 0, errors = 0;
+            long bytes = 0L;
+
+            foreach (SafTreeDocEntry remote in remotes.Values) {
+                ct.ThrowIfCancellationRequested();
+                string key = IOPath.GetFileNameWithoutExtension(remote.Name);
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                string destPath = GetEntryPath(key);
+
+                bool alreadyUpToDate = false;
+                lock (cacheLock) {
+                    if (IOFile.Exists(destPath)) {
+                        FileInfo fi = new(destPath);
+                        long localMs = new DateTimeOffset(fi.LastWriteTimeUtc).ToUnixTimeMilliseconds();
+                        if (remote.SizeBytes > 0L && fi.Length == remote.SizeBytes && localMs >= remote.LastModifiedMs - 2000L)
+                            alreadyUpToDate = true;
+                    }
+                }
+                if (alreadyUpToDate) { skipped++; continue; }
+
+                string tmpPath = destPath + $".{Guid.NewGuid():N}.tmp";
+                try {
+                    using Stream src = cr.OpenInputStream(remote.Uri);
+                    if (src == null) { errors++; continue; }
+                    Directory.CreateDirectory(cacheDir);
+                    long written = 0L;
+                    await using (FileStream dst = new(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true)) {
+                        await src.CopyToAsync(dst, 81920, ct).ConfigureAwait(false);
+                        await dst.FlushAsync(ct).ConfigureAwait(false);
+                        written = dst.Length;
+                    }
+                    if (written <= 0L || NeuralTrackCacheCodec.PeekHeader(tmpPath) == null) { TryDeleteQuietly(tmpPath); errors++; continue; }
+                    lock (cacheLock) {
+                        if (IOFile.Exists(destPath)) IOFile.Delete(destPath);
+                        IOFile.Move(tmpPath, destPath);
+                        if (remote.LastModifiedMs > 0L) {
+                            try { IOFile.SetLastWriteTimeUtc(destPath, DateTimeOffset.FromUnixTimeMilliseconds(remote.LastModifiedMs).UtcDateTime); } catch { }
+                        }
+                        EvictToLimitLocked(maxBytes);
+                    }
+                    imported++; bytes += written;
+                } catch (System.OperationCanceledException) { TryDeleteQuietly(tmpPath); throw; }
+                catch (Exception ex) { TryDeleteQuietly(tmpPath); errors++; AppLogger.Warn($"SAF neural cache import failed ({remote.Name}): {ex.Message}"); }
+            }
+            return new RemoteSafCacheSyncResult {
+                ImportedCount = imported, SkippedCount = skipped, ErrorCount = errors, BytesTransferred = bytes,
+                Summary = $"Imported {imported}, skipped {skipped}, errors {errors}"
+            };
+        }, ct);
+
+    /// <summary>Performs bidirectional newest-wins synchronization between local Slot 7B cache and a SAF / Google Drive folder.</summary>
+    public async Task<RemoteSafCacheSyncResult> SyncRemoteCacheAsync(Context ctx, Android.Net.Uri treeUri, CancellationToken ct = default) {
+        RemoteSafCacheSyncResult imp = await ImportFromSafTreeAsync(ctx, treeUri, ct).ConfigureAwait(false);
+        RemoteSafCacheSyncResult exp = await ExportToSafTreeAsync(ctx, treeUri, ct).ConfigureAwait(false);
+        int errs = imp.ErrorCount + exp.ErrorCount;
+        return new RemoteSafCacheSyncResult {
+            ImportedCount = imp.ImportedCount, ExportedCount = exp.ExportedCount,
+            SkippedCount = Math.Max(imp.SkippedCount, exp.SkippedCount), ErrorCount = errs,
+            BytesTransferred = imp.BytesTransferred + exp.BytesTransferred,
+            Summary = $"Synced: +{imp.ImportedCount} in, +{exp.ExportedCount} out, {errs} errors"
+        };
+    }
+
+    static bool TryResolveSafTree(Context ctx, Android.Net.Uri treeUri, out ContentResolver cr, out string rootDocId, out Android.Net.Uri parentDocUri) {
+        cr = ctx?.ContentResolver; rootDocId = ""; parentDocUri = null;
+        if (cr == null || treeUri == null) return false;
+        try {
+            rootDocId = Android.Provider.DocumentsContract.IsTreeUri(treeUri)
+                ? Android.Provider.DocumentsContract.GetTreeDocumentId(treeUri)
+                : Android.Provider.DocumentsContract.GetDocumentId(treeUri);
+            if (string.IsNullOrWhiteSpace(rootDocId)) return false;
+            parentDocUri = Android.Provider.DocumentsContract.BuildDocumentUriUsingTree(treeUri, rootDocId);
+            return parentDocUri != null;
+        } catch { return false; }
+    }
+
+    List<(string Path, string Name, long Length, long MtimeMs)> SnapshotLocalCacheFiles() {
+        List<(string, string, long, long)> list = [];
+        lock (cacheLock) {
+            if (!Directory.Exists(cacheDir)) return list;
+            foreach (string file in Directory.GetFiles(cacheDir, "*" + FileExtension)) {
+                try {
+                    FileInfo fi = new(file);
+                    if (fi.Length > 0L) list.Add((file, fi.Name, fi.Length, new DateTimeOffset(fi.LastWriteTimeUtc).ToUnixTimeMilliseconds()));
+                } catch { }
+            }
+        }
+        return list;
+    }
+
+    static Dictionary<string, SafTreeDocEntry> QueryRemoteNtcEntries(ContentResolver cr, Android.Net.Uri treeUri, string rootDocId, CancellationToken ct) {
+        Dictionary<string, SafTreeDocEntry> map = new(StringComparer.OrdinalIgnoreCase);
+        Android.Net.Uri childrenUri = Android.Provider.DocumentsContract.BuildChildDocumentsUriUsingTree(treeUri, rootDocId);
+        string[] cols = [Android.Provider.DocumentsContract.Document.ColumnDocumentId, Android.Provider.DocumentsContract.Document.ColumnDisplayName, Android.Provider.DocumentsContract.Document.ColumnMimeType, Android.Provider.DocumentsContract.Document.ColumnSize, Android.Provider.DocumentsContract.Document.ColumnLastModified];
+        using Android.Database.ICursor cursor = cr.Query(childrenUri, cols, null, null, null);
+        if (cursor == null) return map;
+        int idIdx = cursor.GetColumnIndex(cols[0]), nameIdx = cursor.GetColumnIndex(cols[1]), mimeIdx = cursor.GetColumnIndex(cols[2]), sizeIdx = cursor.GetColumnIndex(cols[3]), modIdx = cursor.GetColumnIndex(cols[4]);
+        while (cursor.MoveToNext()) {
+            ct.ThrowIfCancellationRequested();
+            if (idIdx < 0 || nameIdx < 0 || cursor.IsNull(idIdx) || cursor.IsNull(nameIdx)) continue;
+            string mime = (mimeIdx >= 0 && !cursor.IsNull(mimeIdx)) ? (cursor.GetString(mimeIdx) ?? "") : "";
+            if (string.Equals(mime, Android.Provider.DocumentsContract.Document.MimeTypeDir, StringComparison.OrdinalIgnoreCase)) continue;
+            string name = cursor.GetString(nameIdx) ?? "";
+            if (!name.EndsWith(FileExtension, StringComparison.OrdinalIgnoreCase)) continue;
+            string docId = cursor.GetString(idIdx);
+            if (string.IsNullOrWhiteSpace(docId)) continue;
+            long size = (sizeIdx >= 0 && !cursor.IsNull(sizeIdx)) ? cursor.GetLong(sizeIdx) : 0L;
+            long modMs = (modIdx >= 0 && !cursor.IsNull(modIdx)) ? cursor.GetLong(modIdx) : 0L;
+            Android.Net.Uri docUri = Android.Provider.DocumentsContract.BuildDocumentUriUsingTree(treeUri, docId);
+            if (docUri != null && (!map.TryGetValue(name, out SafTreeDocEntry cur) || modMs > cur.LastModifiedMs))
+                map[name] = new SafTreeDocEntry(name, docUri, size, modMs);
+        }
+        return map;
+    }
+}
+
+/// <summary>Summary metrics from SAF / Google Drive remote <c>*.ntc</c> stem cache synchronization.</summary>
+public sealed class RemoteSafCacheSyncResult {
+    public int ExportedCount { get; init; }
+    public int ImportedCount { get; init; }
+    public int SkippedCount { get; init; }
+    public int ErrorCount { get; init; }
+    public long BytesTransferred { get; init; }
+    public string Summary { get; init; } = "";
 }

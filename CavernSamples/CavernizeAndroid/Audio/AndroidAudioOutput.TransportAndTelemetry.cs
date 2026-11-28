@@ -318,11 +318,22 @@ public sealed partial class AndroidAudioOutput {
     }
 
     /// <summary>
+    /// Current hardware/capture sample rate used by active Pro-Audio or fallback mic capture streams.
+    /// </summary>
+    public int ActiveCaptureSampleRate {
+        get {
+            lock (lifecycleLock) {
+                return activeSampleRate >= 44100 ? activeSampleRate : 48000;
+            }
+        }
+    }
+
+    /// <summary>
     /// Ensures live microphone PCM is actively captured into <see cref="RealtimePlayerEngine.LiveMicBridge"/>
     /// during Studio vocal performance recording, using Path A/B duplex when active or a zero-GC managed
     /// <see cref="AudioRecord"/> fallback when running on <see cref="ActiveProAudioBackendKind.LegacyAudioTrack"/>.
     /// </summary>
-    public bool EnsureStudioRecordingCapture(bool active) {
+    public bool EnsureStudioRecordingCapture(bool active, int? requestedSampleRate = null) {
         if (!active) {
             StopFallbackMicCapture();
             return true;
@@ -330,10 +341,10 @@ public sealed partial class AndroidAudioOutput {
         if (engine.LiveMicBridge.IsActive) {
             return true;
         }
-        return StartFallbackMicCapture();
+        return StartFallbackMicCapture(requestedSampleRate);
     }
 
-    bool StartFallbackMicCapture() {
+    bool StartFallbackMicCapture(int? requestedSampleRate = null) {
         ProAudioMicSource micSource;
         AudioDeviceRouteInfo routeSnap;
         int sr;
@@ -343,7 +354,9 @@ public sealed partial class AndroidAudioOutput {
             }
             micSource = proAudioConfig.MicSource;
             routeSnap = lastRouteInfo;
-            sr = activeSampleRate >= 44100 ? activeSampleRate : 48000;
+            sr = (requestedSampleRate.HasValue && requestedSampleRate.Value >= 44100 && requestedSampleRate.Value <= 48000)
+                ? requestedSampleRate.Value
+                : (activeSampleRate >= 44100 ? activeSampleRate : 48000);
             if (sr > 48000) {
                 sr = 48000;
             }

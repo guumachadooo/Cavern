@@ -1793,6 +1793,47 @@ public sealed partial class AppSettingsStore {
         set => Edit().PutString("filterStudioBandsJson", value ?? "").Apply();
     }
 
+    // W55.6 + W57.4: Listening/Workspace Presets, Remote SAF/Drive Cache & QuickEQ Room Calibration
+    public string ActiveListeningPresetId {
+        get => prefs.GetString("activeListeningPresetId", "custom") ?? "custom";
+        set => Edit().PutString("activeListeningPresetId", string.IsNullOrWhiteSpace(value) ? "custom" : value.Trim()).Apply();
+    }
+
+    public string ActiveWorkspacePresetId {
+        get => prefs.GetString("activeWorkspacePresetId", "listener") ?? "listener";
+        set => Edit().PutString("activeWorkspacePresetId", string.IsNullOrWhiteSpace(value) ? "listener" : value.Trim()).Apply();
+    }
+
+    public string RemoteNeuralCacheTreeUri {
+        get => prefs.GetString("remoteNeuralCacheTreeUri", "") ?? "";
+        set => Edit().PutString("remoteNeuralCacheTreeUri", value ?? "").Apply();
+    }
+
+    public bool RemoteNeuralCacheAutoSync {
+        get => prefs.GetBoolean("remoteNeuralCacheAutoSync", false);
+        set => Edit().PutBoolean("remoteNeuralCacheAutoSync", value).Apply();
+    }
+
+    public bool QuickEqEnabled {
+        get => prefs.GetBoolean("quickEqEnabled", false);
+        set => Edit().PutBoolean("quickEqEnabled", value).Apply();
+    }
+
+    public int QuickEqTargetIndex {
+        get => Math.Clamp(prefs.GetInt("quickEqTargetIdx", 0), 0, 3);
+        set => Edit().PutInt("quickEqTargetIdx", Math.Clamp(value, 0, 3)).Apply();
+    }
+
+    public string QuickEqLastSummary {
+        get => prefs.GetString("quickEqLastSummary", "") ?? "";
+        set => Edit().PutString("quickEqLastSummary", value ?? "").Apply();
+    }
+
+    public string QuickEqBandsJson {
+        get => prefs.GetString("quickEqBandsJson", "") ?? "";
+        set => Edit().PutString("quickEqBandsJson", value ?? "").Apply();
+    }
+
     ISharedPreferencesEditor Edit() => prefs.Edit();
 
     public void ApplyGlobals() {
@@ -1808,99 +1849,4 @@ public sealed partial class AppSettingsStore {
         RenderingSettings.KeepTempFiles = KeepTempFiles;
         AndroidRuntimeTelemetry.SetComputeBudgetTier(AiComputeBudgetTier);
     }
-}
-
-public sealed class AndroidUpmixingSettings(AppSettingsStore store) : UpmixingSettings(false) {
-    public override bool MatrixUpmixing {
-        get => store.MatrixUpmixing;
-        set => store.MatrixUpmixing = value;
-    }
-
-    public override bool Cavernize {
-        get => store.CavernizeUpmix;
-        set => store.CavernizeUpmix = value;
-    }
-
-    public override float Effect {
-        get => store.UpmixEffect;
-        set => store.UpmixEffect = value;
-    }
-
-    public override float Smoothness {
-        get => store.UpmixSmoothness;
-        set => store.UpmixSmoothness = value;
-    }
-
-    public override bool ParametricStft {
-        get => true;
-        set { }
-    }
-
-    public override bool AtmosAware {
-        get => (store.MatrixUpmixing || store.CavernizeUpmix) && store.AtmosAwareUpmix;
-        set => store.AtmosAwareUpmix = value;
-    }
-}
-
-public sealed class AndroidRenderingSettings(AppSettingsStore store) : RenderingSettings {
-    public override float Gain {
-        get => QMath.DbToGain(store.RenderGainDb);
-        set => store.RenderGainDb = QMath.GainToDb(value);
-    }
-
-    public override float LFEVolume {
-        get => store.LfeVolume;
-        set => store.LfeVolume = value;
-    }
-
-    public override bool SpeakerVirtualizer {
-        get => store.SpeakerVirtualizer;
-        set => store.SpeakerVirtualizer = value;
-    }
-
-    public override bool MuteBed {
-        get => store.MuteBed;
-        set => store.MuteBed = value;
-    }
-
-    public override bool MuteGround {
-        get => store.MuteGround;
-        set => store.MuteGround = value;
-    }
-
-    public override bool Force24Bit {
-        get => store.Force24Bit;
-        set => store.Force24Bit = value;
-    }
-
-    public override bool SurroundSwap {
-        get => store.SurroundSwap;
-        set => store.SurroundSwap = value;
-    }
-
-    public override bool WAVChannelSkip {
-        get => store.WavChannelSkip;
-        set => store.WavChannelSkip = value;
-    }
-}
-
-public sealed class AndroidFFmpegRunner(Action<string> onStatus) : FFmpeg {
-    public override void UpdateStatusText(string text) => onStatus?.Invoke(text);
-
-    protected override void ConfigureStartInfo(System.Diagnostics.ProcessStartInfo startInfo) {
-        FFmpegInstallerService.ConfigureProcessStartInfo(startInfo, Location);
-    }
-
-    protected override void OnCommandCompleted(string executable, string arguments, int exitCode, string stdout, string stderr) {
-        AppLogger.LogFFmpeg(executable, arguments, exitCode, stdout, stderr);
-    }
-}
-
-public sealed class AndroidLicencePrompt(Func<string, string, bool> promptUser) : ILicence {
-    string desc = "";
-    string text = "";
-
-    public void SetDescription(string description) => desc = description;
-    public void SetLicenceText(string licenceText) => text = licenceText;
-    public bool Prompt() => promptUser?.Invoke(desc, text) ?? false;
 }

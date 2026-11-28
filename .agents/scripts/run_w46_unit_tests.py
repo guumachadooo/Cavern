@@ -4854,6 +4854,213 @@ RunTest("T57_W57_3_FilterStudio_NyquistDecramp_Export_Adm_And_OverrideBed", () =
         $"OverrideBed SubSampleSync expected ~{trueShift} smp, got {syncRes.BaseOffsetSamples:0.00} (synced={syncRes.IsSynced})");
 });
 
+// =========================================================================
+// TEST 58 (W55.6): Listening & Workspace Presets, Secret-Free JSON
+// Portability, MVSEP Recipe Audit, & Heterogeneous Accelerator Router
+// =========================================================================
+RunTest("T58_W55_6_Presets_Portability_MvsepAudit_And_HeterogeneousSymbiosis", () => {
+    // 1. ListeningPresets (Natural, Cinema3D, StudioReference, Karaoke, Custom) & WorkspacePresets (3 entries)
+    ListeningPresetKind[] expectedKinds = [
+        ListeningPresetKind.Natural,
+        ListeningPresetKind.Cinema3D,
+        ListeningPresetKind.StudioReference,
+        ListeningPresetKind.Karaoke,
+        ListeningPresetKind.Custom
+    ];
+    foreach (ListeningPresetKind k in expectedKinds) {
+        Assert(ListeningPresetCatalog.ListeningPresets.Any(p => p.Kind == k),
+            $"ListeningPresetCatalog missing preset kind {k}");
+    }
+    Assert(ListeningPresetCatalog.WorkspacePresets.Count == 3,
+        $"Expected 3 WorkspacePresets, got {ListeningPresetCatalog.WorkspacePresets.Count}");
+
+    // 2. Portable JSON strips secrets on export and rejects/counts secret keys on import
+    Dictionary<string, object> rawPrefs = new(StringComparer.OrdinalIgnoreCase) {
+        ["mvsepApiToken"] = "secret123",
+        ["liveBridgeEncPairSecret"] = "abc",
+        ["cloudLogToken"] = "tok",
+        ["binauralProfile"] = "thk_ku100_nf100",
+        ["masterGainDb"] = -3.0f
+    };
+    string portableJson = ListeningPresetCatalog.SerializePortableJson(rawPrefs, "cinema_3d", "studio_pro");
+    Assert(!portableJson.Contains("secret123", StringComparison.Ordinal) &&
+           !portableJson.Contains("abc", StringComparison.Ordinal) &&
+           !portableJson.Contains("tok", StringComparison.Ordinal),
+        "SerializePortableJson leaked secret values into exported JSON");
+    Assert(ListeningPresetCatalog.TryDeserializePortableJson(portableJson, out PortableSettingsSnapshot cleanSnap, out string cleanErr),
+        $"TryDeserializePortableJson failed on clean snapshot: {cleanErr}");
+    Assert(cleanSnap.Preferences.TryGetValue("binauralProfile", out object bpVal) &&
+           string.Equals(bpVal?.ToString(), "thk_ku100_nf100", StringComparison.Ordinal),
+        "Portable JSON lost safe key binauralProfile");
+    Assert(cleanSnap.Preferences.TryGetValue("masterGainDb", out object mgVal) &&
+           Math.Abs(Convert.ToDouble(mgVal) - (-3.0)) < 1e-4,
+        "Portable JSON lost safe key masterGainDb");
+
+    string dirtyJson = "{\"SchemaVersion\":1,\"AppName\":\"Cavernize\",\"ActiveListeningPresetId\":\"cinema_3d\",\"ActiveWorkspacePresetId\":\"studio_pro\",\"Preferences\":{\"mvsepApiToken\":\"secret123\",\"liveBridgeEncPairSecret\":\"abc\",\"cloudLogToken\":\"tok\",\"binauralProfile\":\"thk_ku100_nf100\",\"masterGainDb\":-3.0}}";
+    Assert(ListeningPresetCatalog.TryDeserializePortableJson(dirtyJson, out PortableSettingsSnapshot dirtySnap, out string dirtyErr),
+        $"TryDeserializePortableJson failed on dirty snapshot: {dirtyErr}");
+    Assert(dirtySnap.StrippedSecretCount >= 3,
+        $"Expected StrippedSecretCount >= 3, got {dirtySnap.StrippedSecretCount}");
+    Assert(!dirtySnap.Preferences.ContainsKey("mvsepApiToken") &&
+           !dirtySnap.Preferences.ContainsKey("liveBridgeEncPairSecret") &&
+           !dirtySnap.Preferences.ContainsKey("cloudLogToken"),
+        "TryDeserializePortableJson retained secret key in Preferences");
+    Assert(dirtySnap.Preferences.ContainsKey("binauralProfile") && dirtySnap.Preferences.ContainsKey("masterGainDb"),
+        "TryDeserializePortableJson dropped safe keys alongside stripped secrets");
+
+    // 3. Curated MVSEP recipes structural & 2-stage audit
+    MvsepRecipeAuditReport mvsepAudit = MvsepAlgorithmPreset.AuditCuratedRecipes();
+    Assert(mvsepAudit.IsValid && mvsepAudit.Issues.Count == 0,
+        $"MvsepAlgorithmPreset.AuditCuratedRecipes failed: {string.Join("; ", mvsepAudit.Issues)}");
+
+    // 4. HeterogeneousAcceleratorRouter routing, PSS cap <= 2600 MB, DoubleBufferedChunkPipeline & SDR parity
+    AcceleratorHardwareCaps caps = new() {
+        SupportsQnnHtp = true,
+        SupportsWebGpu = true,
+        SupportsXnnpack = true,
+        SupportsCpuKleidiAi = true,
+        IsQualcommSnapdragon = true,
+        SocLabel = "QTI SM8750",
+        QnnHtpVersionTag = "V79",
+        PerformanceCoreCount = 4,
+        TotalCoreCount = 8
+    };
+    DeviceMemorySnapshot memSnap = new() {
+        AvailableBytes = 6L * 1024 * 1024 * 1024,
+        TotalBytes = 12L * 1024 * 1024 * 1024,
+        LowMemoryThresholdBytes = 512L * 1024 * 1024,
+        IsLowMemory = false,
+        ThermalStatusCode = 0,
+        Source = "Synthetic"
+    };
+    HeterogeneousAcceleratorRouter router = new();
+
+    ModelGraphTrait staticCnnTrait = HeterogeneousAcceleratorRouter.BuildModelTrait("kim_vocal_2.onnx", 67L * 1024 * 1024);
+    AcceleratorStageAssignment staticRoute = router.RouteModel(staticCnnTrait, caps, memSnap, NeuralExecutionProvider.Auto);
+    Assert(staticRoute.BackboneEp == NeuralExecutionProvider.QnnHtp || staticRoute.BackboneEp == NeuralExecutionProvider.WebGpu,
+        $"Expected QnnHtp or WebGpu for static CNN model, got {staticRoute.BackboneEp}");
+    Assert(staticRoute.FrontendStftBackend == StageComputeBackend.CpuNeon,
+        $"Expected CpuNeon STFT frontend, got {staticRoute.FrontendStftBackend}");
+    Assert(staticRoute.EstimatedPssBytes <= 2600L * 1024 * 1024,
+        $"Static CNN estimated PSS exceeded 2600 MB cap: {staticRoute.EstimatedPssBytes}");
+
+    ModelGraphTrait scnetTrait = HeterogeneousAcceleratorRouter.BuildModelTrait(NeuralModelCatalog.DefaultStemModelId, 24L * 1024 * 1024);
+    AcceleratorStageAssignment dynRoute = router.RouteModel(scnetTrait, caps, memSnap, NeuralExecutionProvider.Auto);
+    Assert(dynRoute.BackboneEp == NeuralExecutionProvider.Cpu,
+        $"Expected Cpu for dynamic RNN SCNet model, got {dynRoute.BackboneEp}");
+    Assert(dynRoute.EstimatedPssBytes <= 2600L * 1024 * 1024,
+        $"Dynamic SCNet estimated PSS exceeded 2600 MB cap: {dynRoute.EstimatedPssBytes}");
+
+    using (DoubleBufferedChunkPipeline<int> pipeline = new(2)) {
+        int[] srcChunks = [1, 2, 3, 4, 5, 6];
+        List<(int idx, int val)> outChunks = new();
+        pipeline.ExecuteAsync(
+            srcChunks,
+            (x, _) => x * 10,
+            (x, _) => x + 3,
+            (idx, val) => outChunks.Add((idx, val))).GetAwaiter().GetResult();
+        Assert(outChunks.Count == srcChunks.Length,
+            $"DoubleBufferedChunkPipeline expected {srcChunks.Length} outputs, got {outChunks.Count}");
+        for (int i = 0; i < srcChunks.Length; i++) {
+            Assert(outChunks[i].idx == i && outChunks[i].val == srcChunks[i] * 10 + 3,
+                $"DoubleBufferedChunkPipeline order/value mismatch at {i}: idx={outChunks[i].idx}, val={outChunks[i].val}");
+        }
+    }
+
+    float[] sdrRef = new float[512];
+    float[] sdrNear = new float[512];
+    float[] sdrBad = new float[512];
+    for (int i = 0; i < sdrRef.Length; i++) {
+        float s = 0.5f * MathF.Sin((float)(2.0 * Math.PI * 440.0 * i / 48000.0));
+        sdrRef[i] = s;
+        sdrNear[i] = s + 0.0015f * MathF.Cos(i * 0.37f);
+        sdrBad[i] = s * 0.5f;
+    }
+    Assert(HeterogeneousAcceleratorRouter.ValidateSdrParity(sdrRef, sdrNear, out double goodDelta) && goodDelta <= 0.3,
+        $"Expected ValidateSdrParity=true for small noise (delta={goodDelta:0.000} dB)");
+    Assert(!HeterogeneousAcceleratorRouter.ValidateSdrParity(sdrRef, sdrBad, out double badDelta) && badDelta > 0.3,
+        $"Expected ValidateSdrParity=false for large error (delta={badDelta:0.000} dB)");
+});
+
+// =========================================================================
+// TEST 59 (W57.4): QuickEQ Farina ESS Deconvolution, Multi-Point MMM,
+// FDW + ERB Smoothing, <= +6.0 dB HF Boost Guard & EqExportFormatter
+// =========================================================================
+RunTest("T59_W57_4_QuickEq_FarinaEss_FdwErb_MultiPoint_And_HighFreqBoostGuard", () => {
+    const int qeSr = 48000;
+    float[] sweep = QuickEqSweepEngine.GenerateExponentialSweep(20.0, 20000.0, 2.0, qeSr, 0.25f);
+    float[] inv = QuickEqSweepEngine.GenerateInverseFilter(20.0, 20000.0, 2.0, qeSr, 0.25f);
+    Assert(sweep.Length == qeSr * 2 && inv.Length == sweep.Length, "ESS sweep/inverse length mismatch");
+
+    float[] recorded = new float[sweep.Length + 128];
+    for (int i = 0; i < sweep.Length; i++) {
+        recorded[i + 64] = sweep[i] * 0.8f;
+    }
+    QuickEqDeconvResult deconv = QuickEqSweepEngine.DeconvolveImpulseResponse(sweep, inv, recorded, qeSr, 20.0, 20000.0);
+    Assert(deconv.IsValid && deconv.EstimatedSnrDb >= 55.0 && deconv.LinearImpulseResponse.Length > 0,
+        $"QuickEQ deconvolution failed QAS|Q4 budget: valid={deconv.IsValid}, snr={deconv.EstimatedSnrDb:0.00} dB");
+
+    // Multi-point power averaging across 3 synthetic curves
+    double[] c1 = new double[96], c2 = new double[96], c3 = new double[96];
+    for (int i = 0; i < 96; i++) {
+        c1[i] = -3.0;
+        c2[i] = 0.0;
+        c3[i] = 3.0;
+    }
+    double[] avgCurve = QuickEqSweepEngine.AverageMultiPointMeasurements([c1, c2, c3]);
+    Assert(avgCurve.Length == 96 && avgCurve.All(double.IsFinite), "Multi-point power average failed");
+    double expectedAvgDb = 10.0 * Math.Log10((Math.Pow(10.0, -0.3) + 1.0 + Math.Pow(10.0, 0.3)) / 3.0);
+    Assert(Math.Abs(avgCurve[0] - expectedAvgDb) < 0.01, $"Multi-point power average expected ~{expectedAvgDb:0.000} dB, got {avgCurve[0]:0.000}");
+
+    // FDW + ERB spectrum on synthetic notched + peaked impulse
+    int irLen = 8192;
+    float[] synthIrF = new float[irLen];
+    synthIrF[128] = 0.8f;
+    CytomicSvfFilter notchF = new(qeSr, CytomicSvfType.Notch, 1000.0, 2.5, 0.0, 0.0) { NyquistMatched = true };
+    CytomicSvfFilter peakF = new(qeSr, CytomicSvfType.Peak, 3500.0, 1.5, 4.5, 0.0) { NyquistMatched = true };
+    notchF.ProcessSlice(synthIrF, 0, irLen, 1);
+    peakF.ProcessSlice(synthIrF, 0, irLen, 1);
+    double[] synthIrD = new double[irLen];
+    for (int i = 0; i < irLen; i++) synthIrD[i] = synthIrF[i];
+
+    double[] fdwFreqs = new double[QuickEqSweepEngine.DefaultSpectrumPoints];
+    double[] fdwMags = new double[QuickEqSweepEngine.DefaultSpectrumPoints];
+    QuickEqSweepEngine.ComputeFdwAndErbSpectrum(synthIrD, qeSr, fdwFreqs, fdwMags, 300.0);
+    Assert(fdwFreqs.Length == QuickEqSweepEngine.DefaultSpectrumPoints && fdwMags.All(double.IsFinite),
+        "ComputeFdwAndErbSpectrum returned non-finite response");
+    Assert(fdwMags.Max() - fdwMags.Min() > 2.0,
+        $"ComputeFdwAndErbSpectrum failed to resolve synthetic notch/peak (span={fdwMags.Max() - fdwMags.Min():0.00} dB)");
+
+    // SolveCorrectionBands against deep -14 dB high-frequency dips at 4 kHz & 8 kHz -> <= +6.0 dB cap (KILL|R4)
+    int nGrid = 96;
+    double[] gridFreqs = new double[nGrid];
+    double[] dipMeas = new double[nGrid];
+    double fRatio = 20000.0 / 20.0;
+    for (int i = 0; i < nGrid; i++) {
+        double f = 20.0 * Math.Pow(fRatio, (double)i / (nGrid - 1));
+        gridFreqs[i] = f;
+        double d4k = Math.Log(f / 4000.0) / Math.Log(2.0);
+        double d8k = Math.Log(f / 8000.0) / Math.Log(2.0);
+        dipMeas[i] = -14.0 * Math.Exp(-d4k * d4k / 0.08) - 14.0 * Math.Exp(-d8k * d8k / 0.08);
+    }
+    QuickEqCalibrationResult qeRes = QuickEqSweepEngine.SolveCorrectionBands(
+        gridFreqs, dipMeas, QuickEqTargetCurve.Flat, maxBands: 8, maxBoostDb: 6.0, maxCutDb: -12.0);
+    Assert(qeRes.Bands.Length > 0, "SolveCorrectionBands returned 0 bands for deep HF dips");
+    foreach (QuickEqBand b in qeRes.Bands) {
+        if (b.FrequencyHz >= 500.0) {
+            Assert(b.GainDb <= 6.0 + 1e-6, $"KILL|R4 violation: HF band @ {b.FrequencyHz:0} Hz has GainDb={b.GainDb:0.00} > 6.0 dB");
+        }
+    }
+    Assert(qeRes.MaxHighFreqBoostDb <= 6.0 + 1e-6,
+        $"KILL|R4 violation: MaxHighFreqBoostDb={qeRes.MaxHighFreqBoostDb:0.00} > 6.0 dB");
+
+    FilterStudioBandSpec[] exportBands = QuickEqSweepEngine.ToExportBands(qeRes.Bands);
+    string qeApo = EqExportFormatter.ToEqualizerApo(exportBands, qeRes.PreampDb);
+    string qeCamilla = EqExportFormatter.ToCamillaDspYaml(exportBands, qeSr, qeRes.PreampDb);
+    Assert(!string.IsNullOrWhiteSpace(qeApo) && qeApo.Contains("Preamp:"), "QuickEQ Equalizer APO export invalid");
+    Assert(!string.IsNullOrWhiteSpace(qeCamilla) && qeCamilla.Contains("filters:"), "QuickEQ CamillaDSP YAML export invalid");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -6490,6 +6697,82 @@ def _py_stage18_w55_5_and_w57_3_contracts() -> None:
     assert "ExportSubModeTools" in exp_tab_cs and "BuildExportToolsSection" in exp_tab_cs, "W57.3 Export -> Tools sub-mode not wired"
 
 
+def _py_stage19_v29102_bugs_and_epoch5_contracts() -> None:
+    """B1-B7 v2.9.102 regression guards + W55.6 Presets/Symbiosis & W57.4 QuickEQ strict C# 8.0 / UI contracts."""
+    diag_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "SelfDiagnosticEngine.cs").read_text(encoding="utf-8")
+    m_log = re.search(r"CheckRuntimeLogHealth\s*\([\s\S]*?(?=\n\s*(?:public|private|internal|static)\s)", diag_cs)
+    assert m_log and "firstLatestIdx" in m_log.group(0), "B1: SelfDiagnosticEngine.CheckRuntimeLogHealth must use firstLatestIdx"
+
+    audit_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.SelfAudit.cs").read_text(encoding="utf-8")
+    for tok in ("cumScaleX", "nextScaleX", "v is not EditText", "EnsureTabLaidOut(1)", "isNowPlayingSheetOpen"):
+        assert tok in audit_cs, f"B2: MainActivity.SelfAudit.cs missing {tok}"
+    assert "EnsureTabLaidOut(4)" not in audit_cs, "B2: MainActivity.SelfAudit.cs must not call obsolete EnsureTabLaidOut(4)"
+
+    np_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NowPlayingSheet.cs").read_text(encoding="utf-8")
+    m_mini = re.search(r"void\s+RefreshMiniPlayerPlaybackUi\s*\([\s\S]*?\n    \}", np_cs)
+    assert m_mini and "ScaleX" in m_mini.group(0) and "LayoutParameters = flp" not in m_mini.group(0), (
+        "B3: RefreshMiniPlayerPlaybackUi must use ScaleX GPU progress without LayoutParameters = flp relayout"
+    )
+    m_build_mini = re.search(r"BuildPersistentMiniPlayerBar\s*\([\s\S]*?return miniPlayerBarHost;", np_cs)
+    assert m_build_mini and "AttachRecoil(miniPlayerBarHost" not in m_build_mini.group(0) and "miniPlayerBarHost.SetOnTouchListener" in m_build_mini.group(0), (
+        "B3: BuildPersistentMiniPlayerBar must not attach AttachRecoil before/over miniPlayerBarHost.SetOnTouchListener"
+    )
+
+    dev_mgr_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AudioDeviceProfileManager.cs").read_text(encoding="utf-8")
+    m_bind = re.search(r"void\s+ApplyStoredBinding\s*\([\s\S]*?\n    \}", dev_mgr_cs)
+    assert m_bind and "!device.IsHeadphoneRoute" in m_bind.group(0), (
+        "B4: AudioDeviceProfileManager.ApplyStoredBinding must guard on !device.IsHeadphoneRoute"
+    )
+
+    bridge_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.LiveBridge.cs").read_text(encoding="utf-8")
+    for pat in (r'"library"[\s\S]*?=>\s*0', r'"sound"[\s\S]*?=>\s*1', r'"export"[\s\S]*?=>\s*2'):
+        assert re.search(pat, bridge_cs), f"B5: MainActivity.LiveBridge.cs missing tab mapping {pat}"
+
+    main_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.cs").read_text(encoding="utf-8")
+    m_trim = re.search(r"public\s+override\s+void\s+OnTrimMemory\s*\([\s\S]*?\n    \}", main_cs)
+    assert m_trim and "InvalidateThumbCache" in m_trim.group(0), (
+        "B6/B7: MainActivity.OnTrimMemory must clear thumbnail cache via InvalidateThumbCache"
+    )
+
+    # W57.4 strict C# 8.0 check on QuickEqSweepEngine.cs
+    qe_cs = (REPO_ROOT / "Cavern" / "ProAudio" / "QuickEqSweepEngine.cs").read_text(encoding="utf-8")
+    assert " is not " not in qe_cs, "W57.4 C# 8.0 violation: 'is not' forbidden in QuickEqSweepEngine.cs"
+    assert "namespace Cavern.ProAudio;" not in qe_cs, "W57.4 C# 8.0 violation: file-scoped namespace forbidden in QuickEqSweepEngine.cs"
+    assert not re.search(r"=\s*new\(", qe_cs), "W57.4 C# 8.0 violation: target-typed new() forbidden in QuickEqSweepEngine.cs"
+
+    # W55.6 + W57.4 Android UI files exist, obey line budget, and use zero legacy CheckBox or '?' buttons
+    for ui_name in ("MainActivity.PresetsAndSymbiosis.cs", "MainActivity.QuickEq.cs"):
+        ui_path = REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / ui_name
+        assert ui_path.is_file(), f"Epoch 5 UI file missing: {ui_name}"
+        ui_src = ui_path.read_text(encoding="utf-8")
+        assert len(ui_src.splitlines()) < 1800, f"{ui_name} exceeds 1800L budget"
+        assert not re.search(r"\bCheckBox\b", ui_src), f"Legacy CheckBox forbidden in {ui_name}"
+        assert not re.search(r'Text\s*=\s*"\?"', ui_src), f"Legacy '?' button forbidden in {ui_name}"
+
+    app_settings_lines = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AppSettingsStore.cs").read_text(encoding="utf-8").splitlines()
+    assert len(app_settings_lines) < 2000, f"AppSettingsStore.cs exceeds 2000L hard ratchet ({len(app_settings_lines)}L)"
+
+    # QA-Destroyer 1-bug=1-test regressions: sequential live engine sync, QuickEQ >48kHz SR + AudioRecord stop/try-catch, PublishToDownloads, Nyquist sync & modal coverage
+    presets_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PresetsAndSymbiosis.cs").read_text(encoding="utf-8")
+    assert "SyncFullStoreToLiveEngines(includeBinauralAndAutoEq: false)" in presets_ui, "QA: ApplyListeningPreset must sync live playerEngine"
+    assert "SyncFullStoreToLiveEngines(includeBinauralAndAutoEq: true)" in presets_ui, "QA: ApplyImportedPortableSnapshot must sync live playerEngine"
+    assert "await engine.ApplyUpmixingSettingsAsync" in presets_ui and "await engine.ApplyNeuralConfigAsync" in presets_ui, "QA: Preset/import sync must await upmix before neural config"
+    assert "_ = playerEngine.ApplyUpmixingSettingsAsync" not in presets_ui and "_ = playerEngine.ApplyNeuralConfigAsync" not in presets_ui, "QA: Fire-and-forget upmix/neural pair clobbers pipelineConfigGen"
+    assert "AndroidFileHelper.PublishToDownloads(this, outPath" in presets_ui, "QA: Portable JSON export must call PublishToDownloads"
+
+    qe_svc = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "QuickEqCalibrationService.cs").read_text(encoding="utf-8")
+    assert "Math.Clamp(mic.SampleRate, 44100, 192000)" in qe_svc, "QA: Active LiveMicBridge must preserve 88.2-192kHz SR"
+    assert "ActiveCaptureSampleRate" in qe_svc and "EnsureStudioRecordingCapture(true, sr)" in qe_svc, "QA: QuickEQ sweep SR must align with AudioOutput capture rate"
+    assert "localRec.Stop();" in qe_svc and qe_svc.index("localRec.Stop();") < qe_svc.index("localRecThread?.Join(500)"), "QA: QuickEQ AudioRecord must Stop() before Join()"
+    assert "catch (ObjectDisposedException)" in qe_svc, "QA: QuickEQ localRecThread must guard Read() against late Dispose"
+    assert "AndroidFileHelper.PublishToDownloads(context, outPath" in qe_svc, "QA: QuickEQ ExportToFile must call PublishToDownloads"
+
+    assert "PresetsAndPortability" in audit_cs and "QuickEqCalibration" in audit_cs, "QA: SelfAudit modals[] must cover PresetsAndPortability and QuickEqCalibration"
+    qe_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.QuickEq.cs").read_text(encoding="utf-8")
+    assert "store.FilterStudioNyquistMatched = playerEngine?.FilterStudioStage?.NyquistMatched" in qe_ui, "QA: QuickEQ apply must persist FilterStudioNyquistMatched"
+    assert qe_ui.index("quickEqService.TakeCount > 0") < qe_ui.index("LoadSavedBands(store)"), "QA: ShowQuickEqExportDialog must prefer unsaved session takes"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -6511,6 +6794,7 @@ PYTHON_CHECKS = [
     ("PY_T16_W55_2_CollapseWhenDisabled_And_W57_1_JocInlineContracts", _py_stage16_w55_2_collapse_when_disabled_and_w57_1_contracts),
     ("PY_T17_W55_3_And_W57_2_Dedup_Coordinator_ListenerCtx_VbrEac3_Ffmpeg", _py_stage17_w55_3_and_w57_2_contracts),
     ("PY_T18_W55_5_And_W57_3_OneUi9GlassPopups_Gestures_FilterStudio_Tools", _py_stage18_w55_5_and_w57_3_contracts),
+    ("PY_T19_V29102_Bugs_And_Epoch5_Contracts", _py_stage19_v29102_bugs_and_epoch5_contracts),
 ]
 
 

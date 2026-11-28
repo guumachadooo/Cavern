@@ -513,6 +513,10 @@ AddDivider(slot2bCard);
                 RefreshSpatialXRayHud();
             }
         });
+        lgsrAbBypassBtn.TextSize = 11.2f;
+        lgsrAbBypassBtn.SetSingleLine(false);
+        lgsrAbBypassBtn.SetMaxLines(2);
+        lgsrAbBypassBtn.Ellipsize = null;
         Button lgsrRescanBtn = PillButton(S["LgsrRescanTwinBtn"], () => {
             CavernizeTrack active = GetActiveTrack();
             if (active != null) {
@@ -521,7 +525,13 @@ AddDivider(slot2bCard);
                 RefreshLgsrUi();
             }
         });
+        lgsrRescanBtn.SetSingleLine(false);
+        lgsrRescanBtn.SetMaxLines(2);
+        lgsrRescanBtn.Ellipsize = null;
         Button lgsrLicBtn = PillButton(S["LgsrLicensesBtn"], ShowLgsrLicensesModal);
+        lgsrLicBtn.SetSingleLine(false);
+        lgsrLicBtn.SetMaxLines(2);
+        lgsrLicBtn.Ellipsize = null;
         lgsrBtns.AddView(lgsrAbBypassBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(6) });
         lgsrBtns.AddView(lgsrRescanBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(6) });
         lgsrBtns.AddView(lgsrLicBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.90f));
@@ -1486,7 +1496,7 @@ AddDivider(slot2bCard);
         if (lgsrAbBypassBtn != null) {
             bool byp = playerEngine?.LgsrBypassed ?? false;
             bool synced = diag.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced;
-            lgsrAbBypassBtn.Text = $"{S["LgsrAbToggleBtn"]}: {(byp ? S["XRayBypassActive"] : S["XRayActiveLive"])}";
+            lgsrAbBypassBtn.Text = $"{S["LgsrAbToggleBtn"]}: {(byp ? "OFF" : "ON")}";
             lgsrAbBypassBtn.Background = synced
                 ? (byp
                     ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.PeachText, 68), 14f, OneUiTheme.WithAlpha(OneUiTheme.PeachText, 165), 1f)

@@ -63,6 +63,9 @@ public partial class MainActivity {
             fs.LoadBandsJson(store.FilterStudioBandsJson);
             fs.UserEnabled = store.FilterStudioEnabled;
         }
+        if (store.QuickEqEnabled && string.IsNullOrWhiteSpace(store.FilterStudioBandsJson)) {
+            QuickEqCalibrationService.SyncSavedToEngine(store, playerEngine);
+        }
         RefreshFilterStudioSummaryUi();
     }
 
@@ -515,6 +518,18 @@ public partial class MainActivity {
         Button extractRawBtn = PillButton(S["ToolExtractRawTrackBtn"], RunRawTrackExtractTool);
         rawCard.AddView(extractRawBtn);
         exportToolsSection.AddView(rawCard);
+
+        // 6. QuickEQ Multi-Point Room Calibration (W57.4)
+        LinearLayout quickEqCard = Card(S["QuickEqTitle"], OneUiIconType.Sliders, OneUiTheme.IconStemsCalib);
+        quickEqCard.AddView(Label(S["QuickEqSub"], 11.8f, OneUiTheme.TextSub));
+        Button quickEqOpenBtn = PrimaryButton(S["QuickEqOpenBtn"], ShowQuickEqCalibrationDialog);
+        quickEqOpenBtn.SetSingleLine(false);
+        quickEqOpenBtn.SetMaxLines(2);
+        quickEqOpenBtn.Ellipsize = null;
+        quickEqCard.AddView(quickEqOpenBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(8)
+        });
+        exportToolsSection.AddView(quickEqCard);
 
         return exportToolsSection;
     }

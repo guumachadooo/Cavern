@@ -15,53 +15,101 @@ namespace CavernizeAndroid.Services;
 
 
 public sealed partial class NativeOnnxRuntimeBridge {
-    List<NeuralExecutionProvider> BuildSessionProviderCascade(NeuralExecutionProvider preferred, string modelPath) {
-        List<NeuralExecutionProvider> list = [];
+    readonly HeterogeneousAcceleratorRouter acceleratorRouter = new();
+    volatile AcceleratorStageAssignment lastRouteAssignment;
+
+    /// <summary>Heterogeneous Hexagon V79 NPU + Adreno WebGPU + KleidiAI CPU symbiosis planner.</summary>
+    public HeterogeneousAcceleratorRouter AcceleratorRouter => acceleratorRouter;
+
+    /// <summary>Most recent per-stage hardware assignment produced by <see cref="BuildSessionProviderCascade"/>.</summary>
+    public AcceleratorStageAssignment LastRouteAssignment => lastRouteAssignment;
+
+    /// <summary>Records measured inference latency into the adaptive EMA throughput tracker.</summary>
+    public void RecordExecutionLatency(NeuralExecutionProvider ep, string modelId, double elapsedMs, int samplesProcessed) =>
+        acceleratorRouter.RecordStageLatency(ep, modelId, elapsedMs, samplesProcessed);
+
+    /// <summary>Returns current EMA throughput metrics across accelerators and models.</summary>
+    public IReadOnlyList<StageThroughputSnapshot> GetAcceleratorThroughputSnapshot() =>
+        acceleratorRouter.GetThroughputSnapshot();
+
+    internal AcceleratorHardwareCaps BuildHardwareCapsSnapshot() {
+        QnnHardwareCapabilitySnapshot qnnCap = OnnxQnnContextCacheManager.ProbeDeviceQnnCapabilities(appContext);
         bool webGpuReady = supportsWebGpu && !webGpuDeviceLostThisProcess;
         bool qnnReady = supportsQnnHtp &&
                         OnnxRuntimeInstallerService.IsQnnAvailableOnDisk(appContext) &&
                         OnnxRuntimeInstallerService.IsQualcommSnapdragonDevice();
-        bool gpuOptimal = IsWebGpuOptimalModel(modelPath);
+        return new AcceleratorHardwareCaps {
+            SupportsQnnHtp = qnnReady,
+            SupportsWebGpu = webGpuReady,
+            SupportsXnnpack = supportsXnnpack,
+            SupportsCpuKleidiAi = true,
+            IsQualcommSnapdragon = qnnCap.IsQualcommSoc,
+            SocLabel = qnnCap.SocLabel,
+            QnnHtpVersionTag = string.IsNullOrEmpty(qnnCap.VendorHtpVersionTag) && qnnCap.IsQualcommSoc ? "V79" : qnnCap.VendorHtpVersionTag,
+            PerformanceCoreCount = DetectPerformanceCoreCount(),
+            TotalCoreCount = Math.Max(1, Environment.ProcessorCount)
+        };
+    }
 
-        if (preferred == NeuralExecutionProvider.WebGpu) {
-            if (webGpuReady) {
-                list.Add(NeuralExecutionProvider.WebGpu);
-            }
-            list.Add(NeuralExecutionProvider.Cpu);
-            return list;
+    internal static string FormatSymbiosisSummary(AcceleratorHardwareCaps caps) {
+        if (caps == null) {
+            return "CPU (ARM64 KleidiAI)";
         }
-        if (preferred == NeuralExecutionProvider.QnnHtp) {
-            if (qnnReady) {
-                list.Add(NeuralExecutionProvider.QnnHtp);
+        string npuTag = string.IsNullOrWhiteSpace(caps.QnnHtpVersionTag) ? "Hexagon NPU" : $"Hexagon {caps.QnnHtpVersionTag} NPU";
+        string gpuTag = caps.IsQualcommSnapdragon ? "Adreno WebGPU" : "Vulkan WebGPU";
+        if (caps.SupportsQnnHtp && caps.SupportsWebGpu) {
+            return $"{npuTag} + {gpuTag} + KleidiAI";
+        }
+        if (caps.SupportsQnnHtp) {
+            return $"{npuTag} + KleidiAI";
+        }
+        if (caps.SupportsWebGpu) {
+            return $"{gpuTag} + KleidiAI";
+        }
+        return "CPU (ARM64 KleidiAI)";
+    }
+
+    List<NeuralExecutionProvider> BuildSessionProviderCascade(NeuralExecutionProvider preferred, string modelPath) {
+        AcceleratorHardwareCaps caps = BuildHardwareCapsSnapshot();
+        long primaryBytes = !string.IsNullOrWhiteSpace(modelPath) && File.Exists(modelPath) ? new FileInfo(modelPath).Length : 0L;
+        long totalBytes = ResolveTotalModelSizeBytes(modelPath ?? string.Empty, primaryBytes);
+        ModelGraphTrait trait = HeterogeneousAcceleratorRouter.BuildModelTrait(modelPath, totalBytes);
+        DeviceMemorySnapshot memSnap = CaptureDeviceMemorySnapshot();
+
+        AcceleratorStageAssignment assignment = acceleratorRouter.RouteModel(trait, caps, memSnap, preferred);
+        lastRouteAssignment = assignment;
+        AppLogger.Info($"Heterogeneous EP route [{assignment.BackboneEp}] ({assignment.Reasoning})");
+
+        List<NeuralExecutionProvider> list = [];
+        void AddUnique(NeuralExecutionProvider ep) {
+            if (!list.Contains(ep)) {
+                list.Add(ep);
             }
-            if (webGpuReady && gpuOptimal) {
-                list.Add(NeuralExecutionProvider.WebGpu);
-            }
-            list.Add(NeuralExecutionProvider.Cpu);
+        }
+
+        if (preferred == NeuralExecutionProvider.Cpu) {
+            AddUnique(NeuralExecutionProvider.Cpu);
             return list;
         }
         if (preferred == NeuralExecutionProvider.Xnnpack) {
-            if (supportsXnnpack) {
-                list.Add(NeuralExecutionProvider.Xnnpack);
-            }
-            list.Add(NeuralExecutionProvider.Cpu);
-            return list;
-        }
-        if (preferred == NeuralExecutionProvider.Cpu) {
-            list.Add(NeuralExecutionProvider.Cpu);
+            if (caps.SupportsXnnpack) AddUnique(NeuralExecutionProvider.Xnnpack);
+            AddUnique(NeuralExecutionProvider.Cpu);
             return list;
         }
 
-        // Auto mode: empirically verified fastest per-architecture cascade on mobile ARM64:
-        // - Static CNN / U-Net STFT models (UVR MDX-Net Karaoke/Vocal/Reverb/Crowd, Apollo): WebGPU Vulkan GPU (5x faster!) -> CPU KleidiAI
-        // - Dynamic subband/RNN models (SCNet, HTDemucs, RoFormer): CPU ARM64 KleidiAI 4-thread (3x faster than XNNPACK, zero GPU sync stalls!)
-        if (webGpuReady && gpuOptimal) {
-            list.Add(NeuralExecutionProvider.WebGpu);
+        AddUnique(assignment.BackboneEp);
+        if (assignment.SecondaryBackboneEp != assignment.BackboneEp &&
+            ((assignment.SecondaryBackboneEp == NeuralExecutionProvider.WebGpu && caps.SupportsWebGpu) ||
+             (assignment.SecondaryBackboneEp == NeuralExecutionProvider.QnnHtp && caps.SupportsQnnHtp))) {
+            AddUnique(assignment.SecondaryBackboneEp);
         }
-        if (qnnReady) {
-            list.Add(NeuralExecutionProvider.QnnHtp);
+        if (preferred != NeuralExecutionProvider.WebGpu && caps.SupportsQnnHtp && trait.IsStaticCnnOrUnetStft) {
+            AddUnique(NeuralExecutionProvider.QnnHtp);
         }
-        list.Add(NeuralExecutionProvider.Cpu);
+        if (caps.SupportsWebGpu && trait.IsStaticCnnOrUnetStft && preferred != NeuralExecutionProvider.Cpu) {
+            AddUnique(NeuralExecutionProvider.WebGpu);
+        }
+        AddUnique(NeuralExecutionProvider.Cpu);
         return list;
     }
 
@@ -69,9 +117,10 @@ public sealed partial class NativeOnnxRuntimeBridge {
         if (fnAppendEp == null || provider == NeuralExecutionProvider.Cpu) {
             return "CPU (ARM64 KleidiAI)";
         }
+        QnnHardwareCapabilitySnapshot qnnCap = OnnxQnnContextCacheManager.ProbeDeviceQnnCapabilities(appContext);
         if (provider == NeuralExecutionProvider.WebGpu) {
             if (TryAppendEp(sessOpts, "WebGPU", Array.Empty<string>(), Array.Empty<string>())) {
-                return "WebGPU (Vulkan GPU)";
+                return qnnCap.IsQualcommSoc ? "Adreno WebGPU (Vulkan GPU) + KleidiAI" : "WebGPU (Vulkan GPU) + KleidiAI";
             }
             return "CPU (ARM64 KleidiAI)";
         }
@@ -79,12 +128,17 @@ public sealed partial class NativeOnnxRuntimeBridge {
             OnnxRuntimeInstallerService.IsQnnAvailableOnDisk(appContext) &&
             OnnxRuntimeInstallerService.IsQualcommSnapdragonDevice()) {
             EnsureQnnAdspLibraryPath();
+            string nativeDir = OnnxRuntimeInstallerService.GetNativeLibraryDir(appContext);
             string qnnPath = OnnxRuntimeInstallerService.GetManagedQnnHtpPath(appContext);
-            string qnnMode = AndroidRuntimeTelemetry.GetQnnPerformanceMode();
-            if (TryAppendEp(sessOpts, "QNN",
-                ["backend_path", "htp_performance_mode", "enable_htp_fp16_precision", "htp_graph_finalization_optimization_mode"],
-                [qnnPath, qnnMode, "1", "3"])) {
-                return $"QNN HTP (NPU · {qnnMode})";
+            if (!string.IsNullOrEmpty(nativeDir) && !string.IsNullOrEmpty(qnnPath) &&
+                qnnPath.StartsWith(nativeDir, StringComparison.Ordinal)) {
+                string qnnMode = AndroidRuntimeTelemetry.GetQnnPerformanceMode();
+                string htpTag = string.IsNullOrEmpty(qnnCap.VendorHtpVersionTag) ? "V79" : qnnCap.VendorHtpVersionTag;
+                if (TryAppendEp(sessOpts, "QNN",
+                    ["backend_path", "htp_performance_mode", "enable_htp_fp16_precision", "htp_graph_finalization_optimization_mode"],
+                    [qnnPath, qnnMode, "1", "3"])) {
+                    return $"Hexagon {htpTag} QNN HTP (NPU · {qnnMode}) + KleidiAI";
+                }
             }
             return "CPU (ARM64 KleidiAI)";
         }
@@ -143,15 +197,8 @@ public sealed partial class NativeOnnxRuntimeBridge {
                 [qnnPath, AndroidRuntimeTelemetry.GetQnnPerformanceMode(), "1"]);
         }
 
-        if (supportsWebGpu) {
-            lastActiveProvider = "WebGPU (Vulkan GPU) + CPU KleidiAI";
-        } else if (supportsQnnHtp) {
-            lastActiveProvider = "QNN HTP (NPU)";
-        } else if (supportsXnnpack) {
-            lastActiveProvider = "CPU (ARM64 KleidiAI)";
-        } else {
-            lastActiveProvider = "CPU";
-        }
+        AcceleratorHardwareCaps caps = BuildHardwareCapsSnapshot();
+        lastActiveProvider = FormatSymbiosisSummary(caps);
     }
 
     bool TryAppendEp(IntPtr sessOpts, string epName, string[] keys, string[] values, bool quietOnUnsupported = false) {

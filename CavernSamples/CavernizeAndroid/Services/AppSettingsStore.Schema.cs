@@ -46,16 +46,18 @@ public sealed class SettingDescriptor {
 }
 
 public sealed partial class AppSettingsStore {
-    /// <summary>Deterministic SHA-256 hash over all 216 canonical setting descriptors.</summary>
-    public const string SettingsSchemaHash = "3bf080a89d87e1608b2d6d88cbaa90d20ae8417ec310ef09a0881c5ba2c81b3c";
+    /// <summary>Deterministic SHA-256 hash over all 224 canonical setting descriptors.</summary>
+    public const string SettingsSchemaHash = "ec12538ef08c89b3d1a89ecd0d977832545e010667dbf82f7a6861a5d0e8c5f5";
 
     /// <summary>Canonical typed descriptors for all public <see cref="AppSettingsStore"/> properties.</summary>
     public static readonly SettingDescriptor[] SchemaDescriptors = [
         new("ActiveDebleedModelId", "activeDebleedModelId", SettingValueKind.String, "Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultDebleedModelId", false, true, static s => s.ActiveDebleedModelId = Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultDebleedModelId),
         new("ActiveDereverbModelId", "activeDereverbModelId", SettingValueKind.String, "Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultDereverbModelId", false, true, static s => s.ActiveDereverbModelId = Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultDereverbModelId),
         new("ActiveKaraokeModelId", "activeKaraokeModelId", SettingValueKind.String, "Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultKaraokeModelId", false, true, static s => s.ActiveKaraokeModelId = Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultKaraokeModelId),
+        new("ActiveListeningPresetId", "activeListeningPresetId", SettingValueKind.String, "\"custom\"", false, true, static s => s.ActiveListeningPresetId = "custom"),
         new("ActiveRestorerModelId", "activeRestorerModelId", SettingValueKind.String, "Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultRestorerModelId", false, true, static s => s.ActiveRestorerModelId = Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultRestorerModelId),
         new("ActiveStemModelId", "activeStemModelId", SettingValueKind.String, "Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId", false, true, static s => s.ActiveStemModelId = Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId),
+        new("ActiveWorkspacePresetId", "activeWorkspacePresetId", SettingValueKind.String, "\"listener\"", false, true, static s => s.ActiveWorkspacePresetId = "listener"),
         new("AiComputeBudgetTier", "aiComputeBudgetTier", SettingValueKind.Int, "1", false, true, static s => s.AiComputeBudgetTier = 1),
         new("AirAbsorptionEnabled", "airAbsorptionEnabled", SettingValueKind.Bool, "true", false, true, static s => s.AirAbsorptionEnabled = true),
         new("AirRelativeHumidityPct", "airRhPct", SettingValueKind.Float, "Cavern.Virtualizer.AirAbsorptionFilter.DefaultRelativeHumidityPct", false, true, static s => s.AirRelativeHumidityPct = Cavern.Virtualizer.AirAbsorptionFilter.DefaultRelativeHumidityPct),
@@ -209,6 +211,12 @@ public sealed partial class AppSettingsStore {
         new("ProAudioPreferredPathIndex", "proAudioPathIdx", SettingValueKind.Int, "(int)Cavernize.Logic.Spatial.ProAudioEnginePath.Auto", false, true, static s => s.ProAudioPreferredPathIndex = (int)Cavernize.Logic.Spatial.ProAudioEnginePath.Auto),
         new("PropagationDelay6DoFEnabled", "propDelay6DoF", SettingValueKind.Bool, "true", false, true, static s => s.PropagationDelay6DoFEnabled = true),
         new("QualityGrading", "qualityGrading", SettingValueKind.Bool, "true", false, true, static s => s.QualityGrading = true),
+        new("QuickEqBandsJson", "quickEqBandsJson", SettingValueKind.String, "\"\"", false, true, static s => s.QuickEqBandsJson = ""),
+        new("QuickEqEnabled", "quickEqEnabled", SettingValueKind.Bool, "false", false, true, static s => s.QuickEqEnabled = false),
+        new("QuickEqLastSummary", "quickEqLastSummary", SettingValueKind.String, "\"\"", false, true, static s => s.QuickEqLastSummary = ""),
+        new("QuickEqTargetIndex", "quickEqTargetIdx", SettingValueKind.Int, "0", false, true, static s => s.QuickEqTargetIndex = 0),
+        new("RemoteNeuralCacheAutoSync", "remoteNeuralCacheAutoSync", SettingValueKind.Bool, "false", false, true, static s => s.RemoteNeuralCacheAutoSync = false),
+        new("RemoteNeuralCacheTreeUri", "remoteNeuralCacheTreeUri", SettingValueKind.String, "\"\"", false, true, static s => s.RemoteNeuralCacheTreeUri = ""),
         new("RenderGainDb", "renderGainDb", SettingValueKind.Float, "0f", false, true, static s => s.RenderGainDb = 0f),
         new("RenderTargetIndex", "renderTarget", SettingValueKind.Int, "RenderTarget.Targets.Length - 1", false, true, static s => s.RenderTargetIndex = RenderTarget.Targets.Length - 1),
         new("ReportOnlyMode", "reportOnly", SettingValueKind.Bool, "false", false, true, static s => s.ReportOnlyMode = false),

@@ -50,11 +50,29 @@ public partial class MainActivity {
                 RefreshSoundHubCardsUi();
             });
             Button openFsBtn = PillButton(S["FilterStudioTitle"], ShowFilterStudioDialog);
-            Button openOutBtn = PillButton(S["SoundHubConfigureBtn"], () => OpenSettingsCategory(0));
-            quickOutRow.AddView(soundHubQuickSpatialBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(6) });
-            quickOutRow.AddView(openFsBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-            quickOutRow.AddView(openOutBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.9f));
+            soundHubQuickSpatialBtn.SetSingleLine(false);
+            soundHubQuickSpatialBtn.SetMaxLines(2);
+            soundHubQuickSpatialBtn.Ellipsize = null;
+            openFsBtn.SetSingleLine(false);
+            openFsBtn.SetMaxLines(2);
+            openFsBtn.Ellipsize = null;
+            quickOutRow.AddView(soundHubQuickSpatialBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+            quickOutRow.AddView(openFsBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             card0.AddView(quickOutRow);
+
+            LinearLayout presetOutRow = HRow();
+            presetOutRow.SetPadding(0, Dp(6), 0, 0);
+            Button openPresetsBtn = PillButton(S["PresetsSheetTitle"], ShowPresetsAndPortabilityModal);
+            Button openOutBtn = PillButton(S["SoundHubConfigureBtn"], () => OpenSettingsCategory(0));
+            openPresetsBtn.SetSingleLine(false);
+            openPresetsBtn.SetMaxLines(2);
+            openPresetsBtn.Ellipsize = null;
+            openOutBtn.SetSingleLine(false);
+            openOutBtn.SetMaxLines(2);
+            openOutBtn.Ellipsize = null;
+            presetOutRow.AddView(openPresetsBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
+            presetOutRow.AddView(openOutBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.85f));
+            card0.AddView(presetOutRow);
             soundHubHomeContainer.AddView(card0);
 
             // Card 2: 3D & Space (Category 1)
@@ -68,6 +86,12 @@ public partial class MainActivity {
             spaceRow.SetPadding(0, Dp(8), 0, 0);
             Button openStageBtn = PillButton(S["NowPlaying3dStageTab"], () => OpenNowPlayingSheet(subViewIndex: 2));
             Button openSpaceBtn = PillButton(S["SoundHubConfigureBtn"], () => OpenSettingsCategory(1));
+            openStageBtn.SetSingleLine(false);
+            openStageBtn.SetMaxLines(2);
+            openStageBtn.Ellipsize = null;
+            openSpaceBtn.SetSingleLine(false);
+            openSpaceBtn.SetMaxLines(2);
+            openSpaceBtn.Ellipsize = null;
             spaceRow.AddView(openStageBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
             spaceRow.AddView(openSpaceBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             card1.AddView(spaceRow);
@@ -82,8 +106,14 @@ public partial class MainActivity {
                 out soundHubSubtitles[2]);
             LinearLayout aiRow = HRow();
             aiRow.SetPadding(0, Dp(8), 0, 0);
-            soundHubQuickAiBtn = PillButton(S["AiPickerLaunchBtn"], () => ShowUnifiedAiModelPickerDialog(RefreshSoundHubCardsUi));
+            soundHubQuickAiBtn = PillButton(S["AiPickerShortBtn"], () => ShowUnifiedAiModelPickerDialog(RefreshSoundHubCardsUi));
             Button openAiBtn = PillButton(S["SoundHubConfigureBtn"], () => OpenSettingsCategory(2));
+            soundHubQuickAiBtn.SetSingleLine(false);
+            soundHubQuickAiBtn.SetMaxLines(2);
+            soundHubQuickAiBtn.Ellipsize = null;
+            openAiBtn.SetSingleLine(false);
+            openAiBtn.SetMaxLines(2);
+            openAiBtn.Ellipsize = null;
             aiRow.AddView(soundHubQuickAiBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.25f) { RightMargin = Dp(8) });
             aiRow.AddView(openAiBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             card2.AddView(aiRow);
@@ -99,9 +129,20 @@ public partial class MainActivity {
             LinearLayout hwRow = HRow();
             hwRow.SetPadding(0, Dp(8), 0, 0);
             Button pickAutoEqBtn = PillButton(S["AutoEqSelectBtn"], ShowAutoEqProfileSelectorDialog);
+            Button quickEqBtn = PillButton(S["QuickEqOpenBtn"], ShowQuickEqCalibrationDialog);
             Button openHwBtn = PillButton(S["SoundHubConfigureBtn"], () => OpenSettingsCategory(3));
-            hwRow.AddView(pickAutoEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
-            hwRow.AddView(openHwBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            pickAutoEqBtn.SetSingleLine(false);
+            pickAutoEqBtn.SetMaxLines(2);
+            pickAutoEqBtn.Ellipsize = null;
+            quickEqBtn.SetSingleLine(false);
+            quickEqBtn.SetMaxLines(2);
+            quickEqBtn.Ellipsize = null;
+            openHwBtn.SetSingleLine(false);
+            openHwBtn.SetMaxLines(2);
+            openHwBtn.Ellipsize = null;
+            hwRow.AddView(pickAutoEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(6) });
+            hwRow.AddView(quickEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.9f) { RightMargin = Dp(6) });
+            hwRow.AddView(openHwBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.95f));
             card3.AddView(hwRow);
             soundHubHomeContainer.AddView(card3);
 
@@ -177,6 +218,14 @@ public partial class MainActivity {
         LinearLayout prefCard = Card(S["AppSettingsPrefsTitle"], OneUiIconType.Sliders, OneUiTheme.IconSystemInfo);
         AddSwitchRow(prefCard, S["AppSettingsProLabToggle"], isSettingsProMode, v => {
             SetSettingsProMode(v);
+        });
+        Button openPresetsSheetBtn = SecondaryButton(S["PresetsSheetTitle"], ShowPresetsAndPortabilityModal);
+        openPresetsSheetBtn.SetSingleLine(false);
+        openPresetsSheetBtn.SetMaxLines(2);
+        openPresetsSheetBtn.Ellipsize = null;
+        prefCard.AddView(openPresetsSheetBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(8),
+            BottomMargin = Dp(6)
         });
         AddDivider(prefCard);
         LinearLayout devRowWrap = new(this) { Orientation = Orientation.Vertical };

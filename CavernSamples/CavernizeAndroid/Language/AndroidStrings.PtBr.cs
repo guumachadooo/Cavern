@@ -1916,5 +1916,37 @@ public sealed partial class AndroidStrings {
         d["ToolMlpPresLabel"] = "Apresentação MLP";
         d["ToolMlpAuto"] = "Automático (Melhor)";
         d["ToolExtractRawTrackBtn"] = "Extrair Faixa Elementar Ativa (--extract)";
+        d["AiPickerShortBtn"] = "Seletor IA";
+        d["StudioW12BatchStartBtn"] = "Iniciar Lote";
+        d["PresetsSheetTitle"] = "Presets e Portabilidade";
+        d["ListeningPresetsLabel"] = "Preset de Audição";
+        d["WorkspacePresetsLabel"] = "Layout do Espaço";
+        d["PresetAppliedFmt"] = "Preset aplicado: {0}";
+        d["PortableSettingsTitle"] = "Backup JSON Portátil";
+        d["PortableExportBtn"] = "Exportar JSON";
+        d["PortableImportBtn"] = "Importar JSON";
+        d["PortableExportDoneFmt"] = "Exportado {0} ({1} segredos removidos)";
+        d["PortableImportDoneFmt"] = "Importadas {0} opções (preset {1})";
+        d["PortableImportFailToast"] = "Falha ao importar JSON: {0}";
+        d["RemoteCacheTitle"] = "Cache Neural Nuvem / Drive";
+        d["RemoteCachePickBtn"] = "Escolher Pasta";
+        d["RemoteCacheSyncBtn"] = "Sincronizar";
+        d["RemoteCacheAutoSwitch"] = "Sincronizar stems *.ntc automaticamente via SAF";
+        d["RemoteCacheNone"] = "Nenhuma pasta SAF / Drive selecionada";
+        d["RemoteCacheSyncedFmt"] = "Cache sincronizado: +{0} entrada, +{1} saída";
+        d["SymbiosisCapsLabel"] = "Simbiose de Aceleração";
+        d["QuickEqTitle"] = "Calibração QuickEQ";
+        d["QuickEqSub"] = "Varredura Farina ESS multiponto, média FDW+ERB e solver Cytomic SVF.";
+        d["QuickEqOpenBtn"] = "QuickEQ";
+        d["QuickEqTargetLabel"] = "Curva Alvo";
+        d["QuickEqTakeSweepBtn"] = "Medir Ponto";
+        d["QuickEqSolveApplyBtn"] = "Calcular e Aplicar";
+        d["QuickEqClearTakesBtn"] = "Limpar";
+        d["QuickEqExportBtn"] = "Exportar";
+        d["QuickEqStatusEmpty"] = "Nenhuma medição ainda. Posicione o microfone no ponto de escuta e toque em Medir Ponto (1–5 pontos).";
+        d["QuickEqTakeDoneFmt"] = "Ponto {0}/{1}: SNR {2:0.0} dB · H2 {3:0.0} dB";
+        d["QuickEqAppliedFmt"] = "QuickEQ aplicado: {0} bandas · Pré-amp {1:+0.0;-0.0;0.0} dB";
+        d["QuickEqExportTitle"] = "Exportar Correção QuickEQ";
+        d["QuickEqPointsBadgeFmt"] = "{0} / {1} pontos medidos";
     }
 }

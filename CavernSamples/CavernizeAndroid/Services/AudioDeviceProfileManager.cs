@@ -275,6 +275,19 @@ public sealed class AudioDeviceProfileManager : IDisposable {
     }
 
     void ApplyStoredBinding(AudioDeviceRouteInfo device, AudioDeviceProfileBinding binding, bool autoMatched, bool notifyListeners) {
+        if (!device.IsHeadphoneRoute) {
+            // Speaker route: never restore headphone binaural profile or apply headphone AutoEq onto speakers
+            store.AutoEqEnabled = false;
+            engine.AutoEqStage.UserEnabled = false;
+            engine.AutoEqStage.ClearProfile();
+            engine.SceneHub.ActiveAutoEqProfileId = string.Empty;
+            engine.SceneHub.ActiveAutoEqProfileName = string.Empty;
+            if (notifyListeners) {
+                ActiveDeviceChanged?.Invoke(device, binding, autoMatched);
+            }
+            return;
+        }
+
         // 1. Restore Binaural HRIR / Direct 2.0 profile if bound
         if (!string.IsNullOrWhiteSpace(binding.BinauralProfileId)) {
             string curBinaural = BinauralProfileService.GetEffectiveProfileId(store);

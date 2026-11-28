@@ -634,11 +634,9 @@ public partial class MainActivity : ILiveBridgeAppHost {
         int target = tabIndex;
         if (target < 0 && !string.IsNullOrWhiteSpace(tabName)) {
             target = tabName.Trim().ToLowerInvariant() switch {
-                "player" or "music" or "play" => 0,
-                "room" or "sala" or "3d" => 1,
-                "studio" or "estudio" or "convert" => 2,
-                "stems" or "tracks" => 3,
-                "settings" or "config" => 4,
+                "library" or "player" or "music" or "play" => 0,
+                "sound" or "settings" or "config" or "room" or "3d" => 1,
+                "export" or "studio" or "estudio" or "convert" or "stems" or "tracks" => 2,
                 _ => -1
             };
         }

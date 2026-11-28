@@ -842,7 +842,7 @@ public partial class MainActivity {
             customContent: content,
             icon: OneUiIconType.Sparkles,
             iconBadgeColor: OneUiTheme.IconStudioExport,
-            positiveText: S["StudioW12BatchBtn"],
+            positiveText: S["StudioW12BatchStartBtn"],
             onPositive: () => {
                 List<StudioBaseOutputFormat> chosen = new();
                 for (int i = 0; i < allFormats.Length; i++) {

@@ -461,6 +461,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     public override void OnTrimMemory(TrimMemory level) {
         base.OnTrimMemory(level);
+        if (level >= TrimMemory.RunningLow || level == TrimMemory.UiHidden) {
+            MediaLibraryService.InvalidateThumbCache();
+        }
+        if (level >= TrimMemory.RunningLow) {
+            GC.Collect(1, GCCollectionMode.Optimized);
+        }
         if ((int)level >= 10) {
             AppLogger.LogMemorySnapshot(this, $"OnTrimMemory({level})");
         }
