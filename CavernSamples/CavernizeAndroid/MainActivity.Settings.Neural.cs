@@ -130,7 +130,6 @@ AddDivider(slot2bCard);
                 if (karaokeVocalLevelBar != null && karaokeVocalLevelBar.Progress != 100) {
                     karaokeVocalLevelBar.Progress = 100;
                     karaokeVocalLevelBar.Invalidate();
-        karaokeDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
                 }
             } else if (v && store.KaraokeVocalLevel >= 0.99f) {
                 // Turning Karaoke ON from 100% defaults to 0% vocal so user immediately hears attenuation
@@ -144,6 +143,11 @@ AddDivider(slot2bCard);
             RefreshLyricsSingDockUi();
             RefreshStudioW12ContextUi();
         }, helpBody: S["TipSpatialKaraoke"]);
+
+        karaokeDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.SpatialKaraokeEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
 
         (karaokeVocalLevelBar, _) = AddSliderRow(
             karaokeDetailsSection,
@@ -181,7 +185,11 @@ AddDivider(slot2bCard);
         }, helpBody: S["TipNeuralTrackCache"]);
 
 
-        neuralCacheDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };        neuralTrackCacheCompSelector = new OneUiInlineSelector(this, S["NeuralTrackCacheCompTitle"]);
+        neuralCacheDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.NeuralTrackCacheEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
+        neuralTrackCacheCompSelector = new OneUiInlineSelector(this, S["NeuralTrackCacheCompTitle"]);
         string[] cacheCompLabels = [
             S["NeuralTrackCacheComp16"],
             S["NeuralTrackCacheComp24"],
@@ -366,7 +374,7 @@ AddDivider(slot2bCard);
         };
         neuralProSection.AddView(WrapControlWithHelp(neuralStudioBundleSelector, S["NeuralStudioBundleTitle"], S["TipNeuralStudioBundle"], bottomMarginDp: 4));
 
-AddDivider(neuralProSection);
+        AddDivider(neuralProSection);
 
         (neuralOverlapBar, _) = AddSliderRow(
             neuralProSection,
@@ -442,8 +450,11 @@ AddDivider(neuralProSection);
         lgsrEnabledSwitch = AddSwitchRow(slot2cCard, S["LgsrEnabledTitle"], store.LgsrEnabled, v => {
             store.LgsrEnabled = v;
             ApplyAndRefreshLgsr(rescanTwin: v);
-        lgsrDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         });
+        lgsrDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.LgsrEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
         AddDivider(lgsrDetailsSection);
 
         lgsrAutoDiscoverSwitch = AddSwitchRow(lgsrDetailsSection, S["LgsrAutoDiscoverTitle"], store.LgsrAutoDiscoverTwin, v => {
@@ -453,7 +464,7 @@ AddDivider(neuralProSection);
         AddDivider(lgsrDetailsSection);
 
         (lgsrFusionBar, _) = AddSliderRow(
-            slot2cCard,
+            lgsrDetailsSection,
             S["LgsrFusionStrengthTitle"],
             0,
             100,

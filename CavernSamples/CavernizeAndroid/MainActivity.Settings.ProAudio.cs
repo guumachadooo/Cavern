@@ -69,7 +69,10 @@ public partial class MainActivity {
             BottomMargin = Dp(8)
         });
 
-                proAudioDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        proAudioDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.ProAudioEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
         proAudioPathSelector = new OneUiInlineSelector(this, S["ProAudioPathTitle"]);
         string[] proAudioPathLabels = [
             S["ProAudioPathAuto"],
@@ -111,13 +114,17 @@ public partial class MainActivity {
             store.LiveMicEnabled = v;
             if (v) {
                 RequestRecordAudioPermissionIfNeeded();
-        proAudioLiveMicDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
                 if (!store.ProAudioEnabled) {
                     store.ProAudioEnabled = true;
                 }
             }
             ApplyAndRefreshProAudio();
         }, helpBody: S["TipProAudioLiveMic"]);
+
+        proAudioLiveMicDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = (store.ProAudioEnabled && store.LiveMicEnabled) ? ViewStates.Visible : ViewStates.Gone
+        };
 
         proAudioMicSourceSelector = new OneUiInlineSelector(this, S["ProAudioMicSourceTitle"]);
         string[] micSourceLabels = [

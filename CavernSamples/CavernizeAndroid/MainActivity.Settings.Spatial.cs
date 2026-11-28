@@ -63,7 +63,10 @@ public partial class MainActivity {
             ApplyAndRefreshExternalization();
         }, helpBody: S["TipIsmRoom"]);
 
-        ismDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        ismDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.IsmRoomEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
         ismRoomPresetSelector = new OneUiInlineSelector(this, S["IsmRoomPresetTitle"]);
         string[] ismPresetLabels = [
             S["IsmPresetMastering"],
@@ -107,7 +110,7 @@ public partial class MainActivity {
         ismDetailsSection.AddView(WrapControlWithHelp(ismOrderSelector, S["IsmOrderTitle"].TrimEnd(':'), S["TipIsmOrder"], bottomMarginDp: 6));
 
         (ismLevelBar, _) = AddSliderRow(
-            externalizationDetailsSection,
+            ismDetailsSection,
             S["IsmLevelTitle"],
             0,
             150,
@@ -135,7 +138,10 @@ public partial class MainActivity {
             ApplyAndRefreshExternalization();
         }, helpBody: S["TipAirAbsorption"]);
 
-        airAbsDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        airAbsDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.AirAbsorptionEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
         (airTempBar, _) = AddSliderRow(
             airAbsDetailsSection,
             S["AirTempTitle"],
@@ -207,8 +213,12 @@ public partial class MainActivity {
         biometricItdSwitch = AddSwitchRow(slot5bCard, S["BiometricItdEnableTitle"], store.BiometricItdEnabled, v => {
             store.BiometricItdEnabled = v;
             ApplyAndRefreshPersonalization(rebuildHrir: true);
-        biometricItdDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         }, helpBody: S["TipBiometricItd"]);
+
+        biometricItdDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.BiometricItdEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
 
         (headWidthBar, _) = AddSliderRow(
             biometricItdDetailsSection,
@@ -248,13 +258,17 @@ public partial class MainActivity {
             " µs",
             defaultValue: 0);
 
-                slot5bCard.AddView(biometricItdDetailsSection);
+        slot5bCard.AddView(biometricItdDetailsSection);
         AddDivider(slot5bCard);
         hptfNotchSwitch = AddSwitchRow(slot5bCard, S["HptfNotchEnableTitle"], store.HptfNotchEnabled, v => {
             store.HptfNotchEnabled = v;
             ApplyAndRefreshPersonalization(rebuildHrir: false);
-        hptfNotchDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         }, helpBody: S["TipHptfNotch"]);
+
+        hptfNotchDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.HptfNotchEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
 
         (hptfFreqBar, _) = AddSliderRow(
             hptfNotchDetailsSection,
@@ -311,7 +325,7 @@ public partial class MainActivity {
         slot5bRow2.AddView(import5bBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f));
         hptfNotchDetailsSection.AddView(slot5bRow2, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
-                slot5bCard.AddView(hptfNotchDetailsSection);
+        slot5bCard.AddView(hptfNotchDetailsSection);
         RegisterSettingsCard(slot5bCard, categoryIndex: 1, isProOnly: true, "hrtf personalization magls ambisonics biometric itd head width hptf notch wizard");
 
         // Wave F (W53.6 / B13): Physical Transaural XTC Spatializer (Phone & External Stereo Speakers, Bit-Exact Headphone Bypass)
@@ -331,7 +345,10 @@ public partial class MainActivity {
             BottomMargin = Dp(8)
         });
 
-        xtcDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        xtcDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.TransauralXtcEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
         transauralPresetSelector = new OneUiInlineSelector(this, S["TransauralPresetTitle"]);
         string[] xtcPresetLabels = [
             S["TransauralPresetPhoneLand"],

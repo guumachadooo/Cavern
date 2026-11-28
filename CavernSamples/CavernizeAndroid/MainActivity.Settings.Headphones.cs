@@ -128,10 +128,14 @@ public partial class MainActivity {
             if (IsCoordinatorUpdating) return;
             store.AutoEqEnabled = v;
             ApplyAutoEqRespectingRoute();
-        autoEqDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
             audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
             RefreshAutoEqUi();
         }, helpBody: S["TipAutoEq"]);
+
+        autoEqDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.AutoEqEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
 
         LinearLayout autoEqRow = HRow();
         autoEqRow.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f);
@@ -274,7 +278,6 @@ public partial class MainActivity {
         headTrackingEnabledSwitch = AddSwitchRow(slot4Card, S["HeadTrackingEnableTitle"], store.HeadTrackingEnabled, v => {
             store.HeadTrackingEnabled = v;
             var src = (Cavernize.Logic.Spatial.HeadTrackerSourceKind)Math.Clamp(store.HeadTrackerSourceIndex, 0, 3);
-        headTrackingDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
             if (v) {
                 RequestBluetoothPermissionsIfNeeded(src);
             }
@@ -282,6 +285,11 @@ public partial class MainActivity {
             audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
             RefreshHeadTrackingUi();
         }, helpBody: S["TipHeadTracking"]);
+
+        headTrackingDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.HeadTrackingEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
 
         headTrackerSourceSelector = new OneUiInlineSelector(this, S["HeadTrackerSourceTitle"]);
         string[] trackerLabels = [

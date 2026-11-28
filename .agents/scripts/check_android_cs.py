@@ -681,6 +681,104 @@ def _run_static_packaging_and_l10n_audit(repo: Path) -> tuple[str, list[str], li
                 if re.match(r'^\s*d\["[^"]+"\]\s*=\s*".*",\s*(?://.*)?$', ln):
                     errs.append(f"{pt_src_path.name}:{idx}: trailing comma `,` instead of `;` in ApplyPortuguese statement (CS1002/CS1513)")
 
+    # 5. Android UI startup-NRE guard: reject UI container/section fields initialized inside AddSwitchRow/AddSliderRow lambdas (v2.9.100-101 regression!)
+    android_dir = repo / "CavernSamples" / "CavernizeAndroid"
+    if android_dir.is_dir():
+        for cs_path in sorted(android_dir.rglob("*.cs")):
+            rel_parts = set(cs_path.relative_to(android_dir).parts)
+            if "bin" in rel_parts or "obj" in rel_parts:
+                continue
+            src = cs_path.read_text(encoding="utf-8", errors="ignore")
+            if "AddSwitchRow(" not in src and "AddSliderRow(" not in src:
+                continue
+            # Strip comments and string/char literals while preserving newlines for exact line numbers
+            clean_chars: list[str] = []
+            i_c, n_c = 0, len(src)
+            while i_c < n_c:
+                ch = src[i_c]
+                nxt = src[i_c + 1] if i_c + 1 < n_c else ""
+                if ch == "/" and nxt == "/":
+                    while i_c < n_c and src[i_c] != "\n":
+                        i_c += 1
+                    continue
+                if ch == "/" and nxt == "*":
+                    i_c += 2
+                    while i_c + 1 < n_c and not (src[i_c] == "*" and src[i_c + 1] == "/"):
+                        clean_chars.append("\n" if src[i_c] == "\n" else " ")
+                        i_c += 1
+                    i_c += 2
+                    continue
+                if ch == "@" and nxt == '"':
+                    clean_chars.append("  ")
+                    i_c += 2
+                    while i_c < n_c:
+                        if src[i_c] == '"' and i_c + 1 < n_c and src[i_c + 1] == '"':
+                            clean_chars.append("  ")
+                            i_c += 2
+                        elif src[i_c] == '"':
+                            clean_chars.append(" ")
+                            i_c += 1
+                            break
+                        else:
+                            clean_chars.append("\n" if src[i_c] == "\n" else " ")
+                            i_c += 1
+                    continue
+                if ch == '"':
+                    clean_chars.append(" ")
+                    i_c += 1
+                    while i_c < n_c:
+                        if src[i_c] == "\\":
+                            clean_chars.append("  ")
+                            i_c += 2
+                        elif src[i_c] == '"':
+                            clean_chars.append(" ")
+                            i_c += 1
+                            break
+                        else:
+                            clean_chars.append("\n" if src[i_c] == "\n" else " ")
+                            i_c += 1
+                    continue
+                if ch == "'":
+                    clean_chars.append(" ")
+                    i_c += 1
+                    while i_c < n_c:
+                        if src[i_c] == "\\":
+                            clean_chars.append("  ")
+                            i_c += 2
+                        elif src[i_c] == "'":
+                            clean_chars.append(" ")
+                            i_c += 1
+                            break
+                        else:
+                            clean_chars.append(" ")
+                            i_c += 1
+                    continue
+                clean_chars.append(ch)
+                i_c += 1
+            cleaned = "".join(clean_chars)
+            for m_call in re.finditer(r"\b(?:AddSwitchRow|AddSliderRow)\s*\(", cleaned):
+                pos = m_call.end()
+                depth = 1
+                while pos < len(cleaned) and depth > 0:
+                    c_ch = cleaned[pos]
+                    if c_ch == "(":
+                        depth += 1
+                    elif c_ch == ")":
+                        depth -= 1
+                    pos += 1
+                call_body = cleaned[m_call.end():pos]
+                for m_init in re.finditer(
+                    r"(?:^|[;{}])\s*([a-z][A-Za-z0-9_]*(?:Section|Container|Group|Panel|Host|Layout))\s*=\s*new\b",
+                    call_body,
+                    re.M,
+                ):
+                    line_no = cleaned[: m_call.end() + m_init.start(1)].count("\n") + 1
+                    rel_cs = cs_path.relative_to(repo).as_posix()
+                    errs.append(
+                        f"{rel_cs}:{line_no}: UI container `{m_init.group(1)}` initialized inside "
+                        f"{m_call.group(0).strip()} callback lambda (causes startup NullReferenceException)"
+                    )
+
     status = "FAIL" if errs else ("WARN" if warns else "PASS")
     return status, errs, warns
 
