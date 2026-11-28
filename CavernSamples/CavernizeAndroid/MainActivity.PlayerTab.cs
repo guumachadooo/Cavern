@@ -470,11 +470,6 @@ public partial class MainActivity {
             playerEngine.VolumeRolloff = (Rolloffs)pos;
         };
         quickCard.AddView(WrapControlWithHelp(rolloffSelector, S["RolloffLabel"].TrimEnd(':'), S["TipRolloff"]));
-        Button roomEditLayoutBtn = PillButton(S["ModLayoutEditRoomBtn"], () => ShowModularLayoutEditorDialog(isRoomTab: true));
-        roomEditLayoutBtn.SetMinimumHeight(Dp(44));
-        quickCard.AddView(roomEditLayoutBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(8)
-        });
         page.AddView(quickCard);
 
         // 4. Live Channel & 3D Object Mixer Card (Filter buttons visibly toggle Solo state)

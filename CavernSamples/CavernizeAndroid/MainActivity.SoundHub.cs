@@ -49,9 +49,11 @@ public partial class MainActivity {
                 ToggleActiveOutputSpatialization();
                 RefreshSoundHubCardsUi();
             });
+            Button openFsBtn = PillButton(S["FilterStudioTitle"], ShowFilterStudioDialog);
             Button openOutBtn = PillButton(S["SoundHubConfigureBtn"], () => OpenSettingsCategory(0));
-            quickOutRow.AddView(soundHubQuickSpatialBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.2f) { RightMargin = Dp(8) });
-            quickOutRow.AddView(openOutBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            quickOutRow.AddView(soundHubQuickSpatialBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(6) });
+            quickOutRow.AddView(openFsBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+            quickOutRow.AddView(openOutBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.9f));
             card0.AddView(quickOutRow);
             soundHubHomeContainer.AddView(card0);
 

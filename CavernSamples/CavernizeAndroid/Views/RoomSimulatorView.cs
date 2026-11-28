@@ -164,6 +164,7 @@ public sealed partial class RoomSimulatorView : View {
     bool lastTappedSourcePrevSolo;
 
     TouchDragMode dragMode = TouchDragMode.None;
+    bool orbitGestureClaimed;
     TrackSourceItem draggedSource;
     Java.Lang.Runnable pendingLongPressReset;
     bool longPressResetTriggered;
@@ -1399,7 +1400,7 @@ public sealed partial class RoomSimulatorView : View {
                     }
 
                     dragMode = TouchDragMode.OrbitCamera;
-                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                    orbitGestureClaimed = false;
                     cameraAnimating = false;
                     return true;
                 }
@@ -1485,7 +1486,21 @@ public sealed partial class RoomSimulatorView : View {
                 }
 
                 if (dragMode == TouchDragMode.OrbitCamera) {
-                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                    if (!orbitGestureClaimed) {
+                        if (dist < touchSlop * 0.65f) {
+                            lastX = tx;
+                            lastY = ty;
+                            return true;
+                        }
+                        // Pure vertical drag inside stage3dScrollView yields cleanly to vertical page scrolling
+                        if (MathF.Abs(dy) > MathF.Abs(dx) * 1.45f) {
+                            dragMode = TouchDragMode.None;
+                            Parent?.RequestDisallowInterceptTouchEvent(false);
+                            return false;
+                        }
+                        orbitGestureClaimed = true;
+                        Parent?.RequestDisallowInterceptTouchEvent(true);
+                    }
                     float stepX = tx - lastX;
                     float stepY = ty - lastY;
                     (float dYaw, float dPitch) = ComputeOrbitDelta(stepX, stepY, dp, InvertOrbitDrag);

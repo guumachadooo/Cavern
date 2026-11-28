@@ -91,6 +91,26 @@ public partial class MainActivity {
         if (topShellTitleText != null) {
             topShellTitleText.Text = GetActiveTabHeaderTitle();
         }
+        UpdateTopShellHeaderScroll(0);
+    }
+
+    /// <summary>
+    /// 120 Hz GPU-composited scroll-driven top-bar compaction (zero RequestLayout / zero jank).
+    /// Smoothly scales title (1.0 -> 0.88) and tucks header slightly as the user scrolls down.
+    /// </summary>
+    void UpdateTopShellHeaderScroll(int scrollY) {
+        if (topShellHeader == null || topShellTitleText == null) {
+            return;
+        }
+        float collapseRange = Math.Max(1f, Dp(72));
+        float progress = Math.Clamp(scrollY / collapseRange, 0f, 1f);
+        topShellTitleText.PivotX = 0f;
+        topShellTitleText.PivotY = topShellTitleText.Height > 0 ? topShellTitleText.Height * 0.5f : Dp(12);
+        float scale = 1f - 0.12f * progress;
+        topShellTitleText.ScaleX = scale;
+        topShellTitleText.ScaleY = scale;
+        topShellHeader.TranslationY = -Dp(4) * progress;
+        topShellTitleText.Alpha = 1f - 0.08f * progress;
     }
 
     /// <summary>
@@ -194,8 +214,132 @@ public partial class MainActivity {
 
         miniPlayerBarHost.AddView(outerCol, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         OneUiTheme.AttachRecoil(miniPlayerBarHost, 0.98f);
-        miniPlayerBarHost.Click += (_, _) => OpenNowPlayingSheet(subViewIndex: 0);
+        miniPlayerBarHost.SetOnTouchListener(new MiniPlayerSwipeUpTouchListener(
+            this,
+            () => OpenNowPlayingSheet(subViewIndex: 0)));
         return miniPlayerBarHost;
+    }
+
+    sealed class MiniPlayerSwipeUpTouchListener(MainActivity owner, Action onOpenSheet) : Java.Lang.Object, View.IOnTouchListener {
+        float downRawY;
+        float downRawX;
+        long downTimeMs;
+        bool draggingUp;
+
+        public bool OnTouch(View v, MotionEvent e) {
+            if (v == null || e == null) {
+                return false;
+            }
+            float slop = ViewConfiguration.Get(owner)?.ScaledTouchSlop ?? owner.Dp(8);
+            switch (e.ActionMasked) {
+                case MotionEventActions.Down:
+                    downRawX = e.RawX;
+                    downRawY = e.RawY;
+                    downTimeMs = e.EventTime;
+                    draggingUp = false;
+                    return true;
+                case MotionEventActions.Move: {
+                    float dy = e.RawY - downRawY;
+                    float dx = e.RawX - downRawX;
+                    if (!draggingUp && dy < -slop && MathF.Abs(dy) > MathF.Abs(dx) * 1.15f) {
+                        draggingUp = true;
+                        v.Parent?.RequestDisallowInterceptTouchEvent(true);
+                    }
+                    if (draggingUp) {
+                        float clamped = Math.Clamp(dy, -owner.Dp(96), 0f);
+                        v.TranslationY = clamped * 0.55f;
+                        v.Alpha = Math.Clamp(1f + clamped / (owner.Dp(180) + 1f), 0.55f, 1f);
+                        return true;
+                    }
+                    return true;
+                }
+                case MotionEventActions.Up: {
+                    float dy = e.RawY - downRawY;
+                    float dx = e.RawX - downRawX;
+                    long dt = Math.Max(1L, e.EventTime - downTimeMs);
+                    float velocityUpPxPerSec = (-dy * 1000f) / dt;
+                    bool isCleanTap = !draggingUp && MathF.Abs(dx) <= slop && MathF.Abs(dy) <= slop;
+                    bool commitSwipe = draggingUp && (-dy >= owner.Dp(42) || velocityUpPxPerSec >= owner.Dp(420));
+                    v.Animate()
+                        .TranslationY(0f)
+                        .Alpha(1f)
+                        .SetDuration(OneUiTheme.QsEditSettleMs)
+                        .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f))
+                        .Start();
+                    draggingUp = false;
+                    if (isCleanTap || commitSwipe) {
+                        onOpenSheet?.Invoke();
+                    }
+                    return true;
+                }
+                case MotionEventActions.Cancel:
+                    draggingUp = false;
+                    v.Animate().TranslationY(0f).Alpha(1f).SetDuration(160).Start();
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    sealed class NowPlayingSheetDismissTouchListener(MainActivity owner, View sheetRoot, Action onDismiss) : Java.Lang.Object, View.IOnTouchListener {
+        float downRawY;
+        float downRawX;
+        long downTimeMs;
+        bool draggingDown;
+
+        public bool OnTouch(View v, MotionEvent e) {
+            if (sheetRoot == null || e == null || !owner.isNowPlayingSheetOpen) {
+                return false;
+            }
+            float slop = ViewConfiguration.Get(owner)?.ScaledTouchSlop ?? owner.Dp(8);
+            switch (e.ActionMasked) {
+                case MotionEventActions.Down:
+                    downRawX = e.RawX;
+                    downRawY = e.RawY;
+                    downTimeMs = e.EventTime;
+                    draggingDown = false;
+                    return true;
+                case MotionEventActions.Move: {
+                    float dy = e.RawY - downRawY;
+                    float dx = e.RawX - downRawX;
+                    if (!draggingDown && dy > slop && MathF.Abs(dy) > MathF.Abs(dx) * 1.15f) {
+                        draggingDown = true;
+                        v.Parent?.RequestDisallowInterceptTouchEvent(true);
+                    }
+                    if (draggingDown) {
+                        float clamped = Math.Max(0f, dy);
+                        sheetRoot.TranslationY = clamped;
+                        float h = Math.Max(sheetRoot.Height, owner.Dp(480));
+                        sheetRoot.Alpha = Math.Clamp(1f - (clamped / h) * 0.45f, 0.55f, 1f);
+                        return true;
+                    }
+                    return true;
+                }
+                case MotionEventActions.Up: {
+                    float dy = e.RawY - downRawY;
+                    long dt = Math.Max(1L, e.EventTime - downTimeMs);
+                    float velDownPxPerSec = (dy * 1000f) / dt;
+                    bool commitDismiss = draggingDown && (dy >= owner.Dp(88) || velDownPxPerSec >= owner.Dp(540));
+                    draggingDown = false;
+                    if (commitDismiss) {
+                        onDismiss?.Invoke();
+                    } else {
+                        sheetRoot.Animate()
+                            .TranslationY(0f)
+                            .Alpha(1f)
+                            .SetDuration(OneUiTheme.SecQsDetailOpenMs)
+                            .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f))
+                            .Start();
+                    }
+                    return true;
+                }
+                case MotionEventActions.Cancel:
+                    draggingDown = false;
+                    sheetRoot.Animate().TranslationY(0f).Alpha(1f).SetDuration(180).Start();
+                    return true;
+            }
+            return false;
+        }
     }
 
     /// <summary>
@@ -210,13 +354,27 @@ public partial class MainActivity {
         };
         nowPlayingSheetHost.SetBackgroundColor(Color.Argb(248, ColBg.R, ColBg.G, ColBg.B));
 
+        // Top One UI 9 swipe-down grabber handle (physics dismiss gesture)
+        FrameLayout grabberHost = new(this);
+        grabberHost.SetPadding(0, Dp(6), 0, Dp(2));
+        View grabberPill = new(this) {
+            Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(96, 255, 255, 255), 99f)
+        };
+        grabberHost.AddView(grabberPill, new FrameLayout.LayoutParams(Dp(40), Dp(4)) {
+            Gravity = GravityFlags.CenterHorizontal
+        });
+        NowPlayingSheetDismissTouchListener sheetDismissGesture = new(this, nowPlayingSheetHost, () => CloseNowPlayingSheet());
+        grabberHost.SetOnTouchListener(sheetDismissGesture);
+        nowPlayingSheetHost.AddView(grabberHost, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
         // Top Sheet Header: [Collapse Chevron]  [Cover | Lyrics | 3D Stage]  [Settings Gear]
         LinearLayout header = new(this) {
             Orientation = Orientation.Horizontal,
             BaselineAligned = false
         };
         header.SetGravity(GravityFlags.CenterVertical);
-        header.SetPadding(Dp(12), Dp(8), Dp(12), Dp(6));
+        header.SetPadding(Dp(12), Dp(4), Dp(12), Dp(6));
+        header.SetOnTouchListener(sheetDismissGesture);
 
         FrameLayout collapseBtn = new(this) {
             Clickable = true,

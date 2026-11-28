@@ -45,6 +45,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     readonly CavernVirtualizerRendererAdapter virtualizerRenderer = new();
     readonly AutoEqPostProcessingStage autoEqPostStage = new();
     readonly HptfNotchPostProcessingStage hptfNotchPostStage = new();
+    readonly FilterStudioPostProcessingStage filterStudioPostStage = new();
     readonly Iso226LoudnessPostProcessingStage iso226PostStage = new();
     readonly Bs1770LoudnessPostProcessingStage bs1770PostStage = new();
     readonly SpatialDialogPostProcessingStage spatialDialogPostStage = new();
@@ -281,6 +282,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         sceneHub.RegisterStageProcessor(vocalMixMatchStage);
         sceneHub.RegisterPostProcessingStage(autoEqPostStage);
         sceneHub.RegisterPostProcessingStage(hptfNotchPostStage);
+        sceneHub.RegisterPostProcessingStage(filterStudioPostStage);
         sceneHub.RegisterPostProcessingStage(iso226PostStage);
         sceneHub.RegisterPostProcessingStage(bs1770PostStage);
         sceneHub.RegisterPostProcessingStage(spatialDialogPostStage);
@@ -1174,6 +1176,9 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     /// </summary>
     public HptfNotchPostProcessingStage HptfNotchStage => hptfNotchPostStage;
 
+    /// <summary>FilterStudio interactive click-free Cytomic SVF parametric EQ stage (Priority 150).</summary>
+    public FilterStudioPostProcessingStage FilterStudioStage => filterStudioPostStage;
+
     /// <summary>
     /// Active Slot 5A physical externalization configuration (ISM Room + Near-Field DVF + ISO 9613-1).
     /// </summary>
@@ -1602,6 +1607,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
             virtualizerRenderer.Dispose();
             autoEqPostStage.Dispose();
             hptfNotchPostStage.Dispose();
+            filterStudioPostStage.Dispose();
             iso226PostStage.Dispose();
             bs1770PostStage.Dispose();
             spatialDialogPostStage.Dispose();

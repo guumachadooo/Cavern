@@ -24,7 +24,7 @@ public partial class MainActivity {
     Button exportProcessQueueBtn;
     TextView exportQueueBadgeTv;
     readonly List<Button> exportSubModeBtns = [];
-    int selectedExportSubMode; // 0 = Master, 1 = Convert, 2 = Extract
+    int selectedExportSubMode; // 0 = Master, 1 = Convert, 2 = Extract, 3 = Tools
 
     /// <summary>
     /// Unified Export Workbench (W55.4.3): merges legacy Studio (Master + Convert) and Stems (Extract)
@@ -43,12 +43,13 @@ public partial class MainActivity {
             new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         page.AddView(exportSourceBarHost);
 
-        // 2. Top-level One UI 9 Segmented Switcher (Master | Convert | Extract) + Conditional Readiness Card
+        // 2. Top-level One UI 9 Segmented Switcher (Master | Convert | Extract | Tools) + Conditional Readiness Card
         LinearLayout modeCard = Card();
         string[] subModeNames = [
             S["ExportSubModeMaster"],
             S["ExportSubModeConvert"],
-            S["ExportSubModeExtract"]
+            S["ExportSubModeExtract"],
+            S["ExportSubModeTools"]
         ];
 
         LinearLayout segCapsule = new(this) {
@@ -64,14 +65,14 @@ public partial class MainActivity {
         for (int i = 0; i < subModeNames.Length; i++) {
             int capturedIdx = i;
             Button pill = PillButton(subModeNames[i], () => SelectExportSubMode(capturedIdx), active: i == selectedExportSubMode);
-            pill.TextSize = 11.8f;
+            pill.TextSize = 11.0f;
             pill.SetSingleLine(true);
             pill.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-            pill.SetPadding(Dp(8), Dp(8), Dp(8), Dp(8));
+            pill.SetPadding(Dp(5), Dp(8), Dp(5), Dp(8));
             exportSubModeBtns.Add(pill);
             studioWorkflowPillBtns.Add(pill);
             segCapsule.AddView(pill, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
-                RightMargin = i < subModeNames.Length - 1 ? Dp(4) : 0
+                RightMargin = i < subModeNames.Length - 1 ? Dp(3) : 0
             });
         }
         modeCard.AddView(segCapsule);
@@ -129,6 +130,9 @@ public partial class MainActivity {
         exportExtractSection.AddView(BuildExtractorTabContent());
         page.AddView(exportExtractSection);
 
+        // 5b. Sub-Mode 3: Tools (ADMValidator, EnhancedAC3Merger, WAVChannelReorderer, --override-bed, --extract, --mlp-presentation)
+        page.AddView(BuildExportToolsSection());
+
         // 6. Primary Action, 4-Stage Pipeline Progress, Cancel, Locate/Share/Play Footer (Master & Convert)
         exportFooterCard = BuildStudioFooterCard();
         page.AddView(exportFooterCard);
@@ -173,7 +177,7 @@ public partial class MainActivity {
     }
 
     void SelectExportSubMode(int modeIndex) {
-        selectedExportSubMode = Math.Clamp(modeIndex, 0, 2);
+        selectedExportSubMode = Math.Clamp(modeIndex, 0, 3);
         selectedStudioWorkflow = selectedExportSubMode;
 
         for (int i = 0; i < exportSubModeBtns.Count; i++) {
@@ -195,8 +199,14 @@ public partial class MainActivity {
         if (exportExtractSection != null) {
             exportExtractSection.Visibility = selectedExportSubMode == 2 ? ViewStates.Visible : ViewStates.Gone;
         }
+        if (exportToolsSection != null) {
+            exportToolsSection.Visibility = selectedExportSubMode == 3 ? ViewStates.Visible : ViewStates.Gone;
+        }
         if (exportFooterCard != null) {
-            exportFooterCard.Visibility = selectedExportSubMode == 2 ? ViewStates.Gone : ViewStates.Visible;
+            exportFooterCard.Visibility = selectedExportSubMode >= 2 ? ViewStates.Gone : ViewStates.Visible;
+        }
+        if (studioQueueSection != null) {
+            studioQueueSection.Visibility = selectedExportSubMode == 3 ? ViewStates.Gone : ViewStates.Visible;
         }
 
         RefreshQueueList();

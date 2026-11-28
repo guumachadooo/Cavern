@@ -934,7 +934,7 @@ public partial class MainActivity {
         });
         musicBottomMoreBtn.Click += (_, _) => SelectNowPlayingSubView(2);
         musicBottomMoreBtn.LongClick += (_, ev) => {
-            ShowModularLayoutEditorDialog(isRoomTab: false);
+            EnterModularInlineEditMode(isRoomTab: false);
             ev.Handled = true;
         };
 
@@ -971,9 +971,10 @@ public partial class MainActivity {
         };
         musicLibraryScrollView.SetClipToPadding(false);
         musicLibraryScrollView.SetPadding(0, 0, 0, Dp(162));
-        musicLibraryScrollView.ScrollChange += (_, _) => {
+        musicLibraryScrollView.ScrollChange += (_, ev) => {
             navFrostedHost?.ScheduleDeferredBlur(180);
             miniPlayerBarHost?.ScheduleDeferredBlur(180);
+            UpdateTopShellHeaderScroll(ev.ScrollY);
         };
         musicLibraryScrollView.AddView(musicLibrarySection, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,

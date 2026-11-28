@@ -46,8 +46,8 @@ public sealed class SettingDescriptor {
 }
 
 public sealed partial class AppSettingsStore {
-    /// <summary>Deterministic SHA-256 hash over all 213 canonical setting descriptors.</summary>
-    public const string SettingsSchemaHash = "a43bf07c4f85df4251b515a5cc9cd991d3c8cc100168f44f856ef3a5a973b440";
+    /// <summary>Deterministic SHA-256 hash over all 216 canonical setting descriptors.</summary>
+    public const string SettingsSchemaHash = "3bf080a89d87e1608b2d6d88cbaa90d20ae8417ec310ef09a0881c5ba2c81b3c";
 
     /// <summary>Canonical typed descriptors for all public <see cref="AppSettingsStore"/> properties.</summary>
     public static readonly SettingDescriptor[] SchemaDescriptors = [
@@ -93,6 +93,9 @@ public sealed partial class AppSettingsStore {
         new("ExportFormatIndex", "exportFormat", SettingValueKind.Int, "4", false, true, static s => s.ExportFormatIndex = 4),
         new("FFmpegExtraArgs", "ffmpegArgs", SettingValueKind.String, "\"\"", false, true, static s => s.FFmpegExtraArgs = ""),
         new("FFmpegLocation", "ffmpegPath", SettingValueKind.String, "\"\"", false, true, static s => s.FFmpegLocation = ""),
+        new("FilterStudioBandsJson", "filterStudioBandsJson", SettingValueKind.String, "\"\"", false, true, static s => s.FilterStudioBandsJson = ""),
+        new("FilterStudioEnabled", "filterStudioEnabled", SettingValueKind.Bool, "false", false, true, static s => s.FilterStudioEnabled = false),
+        new("FilterStudioNyquistMatched", "filterStudioNyquistMatched", SettingValueKind.Bool, "true", false, true, static s => s.FilterStudioNyquistMatched = true),
         new("Force24Bit", "force24Bit", SettingValueKind.Bool, "false", false, true, static s => s.Force24Bit = false),
         new("HasMicVoiceprint", "", SettingValueKind.ReadOnly, "(read-only)", false, false, null),
         new("HeadTrackerSourceIndex", "headTrackerSourceIndex", SettingValueKind.Int, "(int)Cavernize.Logic.Spatial.HeadTrackerSourceKind.GalaxyBudsRfcomm", false, true, static s => s.HeadTrackerSourceIndex = (int)Cavernize.Logic.Spatial.HeadTrackerSourceKind.GalaxyBudsRfcomm),

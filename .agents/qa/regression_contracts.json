@@ -603,8 +603,8 @@
         {
           "kind": "file_contains_regex",
           "path": "CavernSamples/CavernizeAndroid/MainActivity.ModularBlocks.cs",
-          "pattern": "void\\s+ShowModularLayoutEditorDialog\\s*\\(",
-          "message": "ShowModularLayoutEditorDialog must remain intact in MainActivity.ModularBlocks.cs"
+          "pattern": "void\\s+EnterModularInlineEditMode\\s*\\(",
+          "message": "EnterModularInlineEditMode (One UI 9 QsEditMode in-place drag) must remain intact in MainActivity.ModularBlocks.cs"
         },
         {
           "kind": "file_contains_regex",
@@ -773,6 +773,58 @@
           "path": "CavernSamples/CavernizeAndroid/MainActivity.Navigation.cs",
           "pattern": "c\\.TranslationX\\s*=\\s*0f",
           "message": "MainActivity.Navigation.cs must reset TranslationX and Visibility on AnimationCancel to prevent stuck semi-transparent overlays"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-005-ONEUI9-GLASS-NO-FULLSCREEN-BLUR",
+      "bug_ref": "V4.5/W55.5",
+      "title": "Enforce authentic One UI 9 SecQSDetail API 31+ cross-window blur-behind with zero DecorView full-screen RenderEffect blur (H1)",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:PY_T18",
+      "added_date": "2026-11-27",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Views/OneUiComponents.cs",
+          "pattern": "SetBackgroundBlurRadius\\s*\\(",
+          "message": "OneUiModalDialog must use API 31+ Window.SetBackgroundBlurRadius for SecQSDetail popups"
+        },
+        {
+          "kind": "file_forbids_regex",
+          "path": "CavernSamples/CavernizeAndroid/Views/OneUiComponents.cs",
+          "pattern": "bgRoot\\.SetRenderEffect",
+          "message": "H1 invariant: OneUiModalDialog must never apply full-screen DecorView RenderEffect blur"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-006-FILTERSTUDIO-NYQUIST-SVF",
+      "bug_ref": "C3/W57.3",
+      "title": "Preserve Nyquist-decramped Cytomic SVF FilterStudio, universal EQ/FIR export, and ADM BS.2076-2 validator",
+      "domain": "dsp-format",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T57 + PY_T18",
+      "added_date": "2026-11-27",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "Cavern/Filters/CytomicSvfFilter.cs",
+          "pattern": "public\\s+bool\\s+NyquistMatched",
+          "message": "CytomicSvfFilter.NyquistMatched must remain intact for <=0.25 dB 18 kHz accuracy"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "Cavern.Format/Transcoders/AudioDefinitionModel.Validation.cs",
+          "pattern": "public\\s+AdmValidationReport\\s+ValidateBs2076_2\\s*\\(",
+          "message": "AudioDefinitionModel.ValidateBs2076_2() must remain intact for Export -> Tools"
         }
       ]
     }

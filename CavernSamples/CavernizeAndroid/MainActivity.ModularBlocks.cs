@@ -1,7 +1,8 @@
-using Android.App;
 using Android.Graphics;
+using Android.Graphics.Drawables;
 using Android.Text;
 using Android.Views;
+using Android.Views.Animations;
 using Android.Widget;
 
 using Cavernize.Logic.Models;
@@ -12,9 +13,10 @@ using CavernizeAndroid.Views;
 namespace CavernizeAndroid;
 
 /// <summary>
-/// Wave D (W53.4 / B10): One UI 9 modular editable quick-panel control blocks for Play &amp; 3D Room tabs.
-/// Reorders and toggles existing Views in-place at 120 Hz zero-jank with zero full-screen RenderEffect blur,
-/// WCAG AA contrast (OneUiTheme.OnPrimary), and &gt;=44dp touch targets.
+/// W55.5.2 (One UI 9 QsEditMode): True in-place long-press-border drag-reorder for modular control blocks
+/// on Now Playing and 3D Stage tabs. Uses verified SystemUI.apk <c>EditModeTileDefaults</c> /
+/// <c>SecQSImplAnimatorBase</c> physics (lift scale 1.035, 10dp elevation, 200ms settle, 28dp border,
+/// zero full-screen RenderEffect blur, zero legacy ↑/↓ dialog buttons).
 /// </summary>
 public partial class MainActivity {
     LinearLayout modularPlayContainer;
@@ -24,6 +26,12 @@ public partial class MainActivity {
     LinearLayout modularRoomContainer;
     readonly Dictionary<string, View> modularRoomBlocks = new(StringComparer.Ordinal);
     ModularQuickPanelLayout roomModularLayout;
+
+    bool isPlayModularEditMode;
+    bool isRoomModularEditMode;
+    LinearLayout playModularEditToolbar;
+    LinearLayout roomModularEditToolbar;
+    readonly Dictionary<View, Drawable> modularSavedBackgrounds = new();
 
     void RegisterPlayModularBlocks(LinearLayout container) {
         modularPlayContainer = container;
@@ -40,6 +48,7 @@ public partial class MainActivity {
         playModularLayout = ModularQuickPanelLayout.FromJsonOrDefault(
             store?.ModularPlayLayoutJson,
             ModularQuickPanelLayout.CreateDefaultPlayLayout());
+        AttachModularLongPressTriggers(modularPlayBlocks, isRoomTab: false);
         ApplyPlayModularLayout();
     }
 
@@ -63,7 +72,27 @@ public partial class MainActivity {
         roomModularLayout = ModularQuickPanelLayout.FromJsonOrDefault(
             store?.ModularRoomLayoutJson,
             ModularQuickPanelLayout.CreateDefaultRoomLayout());
+        AttachModularLongPressTriggers(modularRoomBlocks, isRoomTab: true);
         ApplyRoomModularLayout();
+    }
+
+    void AttachModularLongPressTriggers(Dictionary<string, View> registry, bool isRoomTab) {
+        foreach (KeyValuePair<string, View> kv in registry) {
+            View blockView = kv.Value;
+            string blockId = kv.Key;
+            if (blockView == null) {
+                continue;
+            }
+            blockView.LongClickable = true;
+            blockView.LongClick += (_, ev) => {
+                if (isRoomTab ? !isRoomModularEditMode : !isPlayModularEditMode) {
+                    blockView.PerformHapticFeedback(FeedbackConstants.LongPress);
+                    EnterModularInlineEditMode(isRoomTab);
+                    ev.Handled = true;
+                }
+            };
+            blockView.SetOnTouchListener(new ModularBlockDragTouchListener(this, blockView, blockId, isRoomTab));
+        }
     }
 
     static void RegisterBlockIfNotNull(Dictionary<string, View> map, string id, View view) {
@@ -72,12 +101,7 @@ public partial class MainActivity {
         }
     }
 
-    bool IsPlayModularBlockVisible(string id) {
-        if (playModularLayout == null) {
-            return true;
-        }
-        return playModularLayout.IsVisible(id);
-    }
+    bool IsPlayModularBlockVisible(string id) => playModularLayout?.IsVisible(id) ?? true;
 
     void ApplyPlayModularLayout() {
         if (modularPlayContainer == null || playModularLayout == null) {
@@ -104,9 +128,13 @@ public partial class MainActivity {
         }
 
         bool isLyricsMode = isPlayTab && musicStageMode == PlayerStageMode.Lyrics;
+        bool inEditMode = isPlayTab ? isPlayModularEditMode : isRoomModularEditMode;
+        LinearLayout editToolbar = isPlayTab ? playModularEditToolbar : roomModularEditToolbar;
 
-        // Check if child order already matches to avoid unnecessary RemoveView/AddView layout passes at 120 Hz
-        List<View> desiredOrder = new(layout.Blocks.Count);
+        List<View> desiredOrder = new(layout.Blocks.Count + 1);
+        if (inEditMode && editToolbar != null) {
+            desiredOrder.Add(editToolbar);
+        }
         for (int i = 0; i < layout.Blocks.Count; i++) {
             ModularBlockEntry entry = layout.Blocks[i];
             if (!registry.TryGetValue(entry.Id, out View v) || v == null) {
@@ -140,7 +168,6 @@ public partial class MainActivity {
             return;
         }
 
-        // Preserve exact LayoutParameters while re-attaching existing View instances cleanly (zero leak, zero recreate)
         List<(View View, ViewGroup.LayoutParams Params)> preserved = new(desiredOrder.Count);
         for (int i = 0; i < desiredOrder.Count; i++) {
             View v = desiredOrder[i];
@@ -160,203 +187,292 @@ public partial class MainActivity {
         }
     }
 
-    string ResolveModularBlockLabel(string id) => id switch {
-        ModularQuickPanelLayout.PlayIds.Stage => S["ModBlockPlayStage"],
-        ModularQuickPanelLayout.PlayIds.Title => S["ModBlockPlayTitle"],
-        ModularQuickPanelLayout.PlayIds.SeekBar => S["ModBlockPlaySeek"],
-        ModularQuickPanelLayout.PlayIds.Badges => S["ModBlockPlayBadges"],
-        ModularQuickPanelLayout.PlayIds.Transport => S["ModBlockPlayTransport"],
-        ModularQuickPanelLayout.PlayIds.Volume => S["ModBlockPlayVolume"],
-        ModularQuickPanelLayout.PlayIds.SpatialPills => S["ModBlockPlaySpatialPills"],
-        ModularQuickPanelLayout.PlayIds.BottomActions => S["ModBlockPlayBottomActions"],
-        ModularQuickPanelLayout.RoomIds.SignalChain => S["ModBlockRoomSignalChain"],
-        ModularQuickPanelLayout.RoomIds.RoomCanvas => S["ModBlockRoomCanvas"],
-        ModularQuickPanelLayout.RoomIds.MiniTransport => S["ModBlockRoomMiniTransport"],
-        ModularQuickPanelLayout.RoomIds.XRayInspector => S["ModBlockRoomXRay"],
-        ModularQuickPanelLayout.RoomIds.QuickPanel => S["ModBlockRoomQuickPanel"],
-        ModularQuickPanelLayout.RoomIds.ChannelMixer => S["ModBlockRoomMixer"],
-        _ => id
-    };
-
     /// <summary>
-    /// Opens the One UI 9 Modular Quick-Panel Layout Editor dialog for Play or 3D Room,
-    /// allowing instant live block reordering, visibility toggles, and 1-tap default reset.
+    /// Enters authentic One UI 9 <c>QsEditMode</c> in-place direct drag-reorder on Play or 3D Stage blocks.
     /// </summary>
-    void ShowModularLayoutEditorDialog(bool isRoomTab) {
-        if (uiDestroyed || IsFinishing) {
+    void EnterModularInlineEditMode(bool isRoomTab) {
+        LinearLayout container = isRoomTab ? modularRoomContainer : modularPlayContainer;
+        Dictionary<string, View> registry = isRoomTab ? modularRoomBlocks : modularPlayBlocks;
+        ModularQuickPanelLayout layout = isRoomTab ? roomModularLayout : playModularLayout;
+        if (container == null || layout == null) {
             return;
         }
-        ModularQuickPanelLayout defaults = isRoomTab
-            ? ModularQuickPanelLayout.CreateDefaultRoomLayout()
-            : ModularQuickPanelLayout.CreateDefaultPlayLayout();
-        ModularQuickPanelLayout active = isRoomTab
-            ? (roomModularLayout ??= ModularQuickPanelLayout.FromJsonOrDefault(store?.ModularRoomLayoutJson, defaults))
-            : (playModularLayout ??= ModularQuickPanelLayout.FromJsonOrDefault(store?.ModularPlayLayoutJson, defaults));
 
-        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
-
-        TextView subTv = Label(S["ModLayoutSubtitle"], 12f, OneUiTheme.TextSub);
-        content.AddView(subTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(12)
-        });
-
-        LinearLayout listHost = new(this) { Orientation = Orientation.Vertical };
-        content.AddView(listHost, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(10)
-        });
-
-        void PersistAndApply() {
-            if (store != null) {
-                if (isRoomTab) {
-                    store.ModularRoomLayoutJson = active.ToJson();
-                } else {
-                    store.ModularPlayLayoutJson = active.ToJson();
-                }
+        if (isRoomTab) {
+            if (isRoomModularEditMode) {
+                return;
             }
+            isRoomModularEditMode = true;
+            roomModularEditToolbar ??= BuildInlineModularEditToolbar(isRoomTab: true);
+        } else {
+            if (isPlayModularEditMode) {
+                return;
+            }
+            isPlayModularEditMode = true;
+            playModularEditToolbar ??= BuildInlineModularEditToolbar(isRoomTab: false);
+        }
+
+        foreach (KeyValuePair<string, View> kv in registry) {
+            View v = kv.Value;
+            if (v == null) {
+                continue;
+            }
+            if (!modularSavedBackgrounds.ContainsKey(v)) {
+                modularSavedBackgrounds[v] = v.Background;
+            }
+            v.Background = OneUiTheme.CreateRoundedDrawable(
+                this,
+                Color.Argb(54, 46, 48, 60),
+                OneUiTheme.QsEditCornerDp,
+                OneUiTheme.QsEditBorderStroke,
+                1.5f);
+            v.Animate()
+                .ScaleX(0.97f)
+                .ScaleY(0.97f)
+                .SetDuration(OneUiTheme.QsEditSettleMs)
+                .SetInterpolator(new PathInterpolator(0.22f, 1f, 0.36f, 1f))
+                .Start();
+        }
+
+        if (isRoomTab) {
+            ApplyRoomModularLayout();
+        } else {
+            ApplyPlayModularLayout();
+        }
+        ShowToast(S["ModLayoutDragActiveHint"]);
+    }
+
+    /// <summary>
+    /// Exits in-place <c>QsEditMode</c>, restores resting scale/borders, and persists the updated layout.
+    /// </summary>
+    void ExitModularInlineEditMode(bool isRoomTab) {
+        Dictionary<string, View> registry = isRoomTab ? modularRoomBlocks : modularPlayBlocks;
+        if (isRoomTab) {
+            if (!isRoomModularEditMode) {
+                return;
+            }
+            isRoomModularEditMode = false;
+        } else {
+            if (!isPlayModularEditMode) {
+                return;
+            }
+            isPlayModularEditMode = false;
+        }
+
+        foreach (KeyValuePair<string, View> kv in registry) {
+            View v = kv.Value;
+            if (v == null) {
+                continue;
+            }
+            if (modularSavedBackgrounds.TryGetValue(v, out Drawable origBg)) {
+                v.Background = origBg;
+                modularSavedBackgrounds.Remove(v);
+            }
+            v.Elevation = 0f;
+            v.Animate()
+                .TranslationY(0f)
+                .ScaleX(1f)
+                .ScaleY(1f)
+                .Alpha(1f)
+                .SetDuration(OneUiTheme.QsEditSettleMs)
+                .SetInterpolator(new PathInterpolator(0.22f, 1f, 0.36f, 1f))
+                .Start();
+        }
+
+        PersistModularLayout(isRoomTab);
+        if (isRoomTab) {
+            ApplyRoomModularLayout();
+        } else {
+            ApplyPlayModularLayout();
+        }
+    }
+
+    LinearLayout BuildInlineModularEditToolbar(bool isRoomTab) {
+        LinearLayout bar = new(this) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false,
+            Background = OneUiTheme.CreateRoundedDrawable(
+                this,
+                OneUiTheme.SecQsDetailBg,
+                OneUiTheme.PillCornerDp,
+                OneUiTheme.SecQsDetailStroke,
+                1f)
+        };
+        bar.SetGravity(GravityFlags.CenterVertical);
+        bar.SetPadding(Dp(12), Dp(6), Dp(8), Dp(6));
+        bar.LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        };
+
+        TextView hint = new(this) {
+            Text = S["ModLayoutDragToolbarHint"],
+            TextSize = 11.8f
+        };
+        hint.SetTextColor(OneUiTheme.TextPrimary);
+        hint.Typeface = OneUiTheme.GetAppleFontSemibold(this);
+        hint.SetSingleLine(true);
+        hint.Ellipsize = TextUtils.TruncateAt.End;
+        bar.AddView(hint, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
+            RightMargin = Dp(6)
+        });
+
+        Button resetBtn = PillButton(S["ModLayoutResetBtn"], () => {
+            ResetModularLayoutToDefault(isRoomTab);
+            ShowToast(S["ModLayoutResetToast"]);
+        });
+        resetBtn.TextSize = 11.5f;
+        resetBtn.SetMinimumHeight(Dp(34));
+        resetBtn.SetPadding(Dp(10), Dp(4), Dp(10), Dp(4));
+        bar.AddView(resetBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+            RightMargin = Dp(6)
+        });
+
+        Button doneBtn = PrimaryButton(S["ModLayoutDoneBtn"], () => ExitModularInlineEditMode(isRoomTab));
+        doneBtn.TextSize = 11.5f;
+        doneBtn.SetMinimumHeight(Dp(34));
+        doneBtn.SetPadding(Dp(12), Dp(4), Dp(12), Dp(4));
+        bar.AddView(doneBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        return bar;
+    }
+
+    void ResetModularLayoutToDefault(bool isRoomTab) {
+        if (isRoomTab) {
+            roomModularLayout = ModularQuickPanelLayout.CreateDefaultRoomLayout();
+            PersistModularLayout(isRoomTab: true);
+            ApplyRoomModularLayout();
+        } else {
+            playModularLayout = ModularQuickPanelLayout.CreateDefaultPlayLayout();
+            PersistModularLayout(isRoomTab: false);
+            ApplyPlayModularLayout();
+        }
+    }
+
+    void PersistModularLayout(bool isRoomTab) {
+        if (store == null) {
+            return;
+        }
+        if (isRoomTab && roomModularLayout != null) {
+            store.ModularRoomLayoutJson = roomModularLayout.ToJson();
+        } else if (!isRoomTab && playModularLayout != null) {
+            store.ModularPlayLayoutJson = playModularLayout.ToJson();
+        }
+    }
+
+    void SwapModularBlockByDrag(bool isRoomTab, string draggedId, int directionDelta) {
+        ModularQuickPanelLayout layout = isRoomTab ? roomModularLayout : playModularLayout;
+        if (layout == null || directionDelta == 0) {
+            return;
+        }
+        bool moved = directionDelta < 0 ? layout.MoveUp(draggedId) : layout.MoveDown(draggedId);
+        if (moved) {
+            PersistModularLayout(isRoomTab);
             if (isRoomTab) {
                 ApplyRoomModularLayout();
             } else {
                 ApplyPlayModularLayout();
             }
         }
+    }
 
-        void RebuildRows() {
-            listHost.RemoveAllViews();
-            for (int i = 0; i < active.Blocks.Count; i++) {
-                ModularBlockEntry entry = active.Blocks[i];
-                string blockId = entry.Id;
+    sealed class ModularBlockDragTouchListener(
+        MainActivity owner,
+        View blockView,
+        string blockId,
+        bool isRoomTab) : Java.Lang.Object, View.IOnTouchListener {
+        float lastRawY;
+        float accumDy;
+        bool dragging;
 
-                LinearLayout row = HRow();
-                row.BaselineAligned = false;
-                row.SetGravity(GravityFlags.CenterVertical);
-                row.SetPadding(Dp(12), Dp(8), Dp(10), Dp(8));
-                row.SetMinimumHeight(Dp(52));
-                row.Background = OneUiTheme.CreateRoundedDrawable(
-                    this,
-                    OneUiTheme.SurfaceModalRow,
-                    16f,
-                    OneUiTheme.BorderSubtle,
-                    1f);
-
-                LinearLayout textCol = new(this) { Orientation = Orientation.Vertical };
-                TextView nameTv = Label(ResolveModularBlockLabel(blockId), 13.5f, OneUiTheme.TextPrimary);
-                nameTv.SetTypeface(null, TypefaceStyle.Bold);
-                nameTv.SetSingleLine(true);
-                nameTv.Ellipsize = TextUtils.TruncateAt.End;
-                textCol.AddView(nameTv);
-
-                if (entry.Locked) {
-                    TextView lockHint = Label(
-                        entry.PinnedTop ? S["ModBlockPinnedTag"] : S["ModBlockEssentialTag"],
-                        10.5f,
-                        OneUiTheme.PrimaryHigh);
-                    lockHint.SetSingleLine(true);
-                    textCol.AddView(lockHint);
-                }
-                row.AddView(textCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
-                    RightMargin = Dp(6)
-                });
-
-                bool canUp = active.CanMoveUp(blockId);
-                bool canDown = active.CanMoveDown(blockId);
-
-                Button upBtn = MakeModularMoveBtn("↑", canUp, () => {
-                    if (active.MoveUp(blockId)) {
-                        PersistAndApply();
-                        RebuildRows();
-                    }
-                });
-                Button downBtn = MakeModularMoveBtn("↓", canDown, () => {
-                    if (active.MoveDown(blockId)) {
-                        PersistAndApply();
-                        RebuildRows();
-                    }
-                });
-
-                row.AddView(upBtn, new LinearLayout.LayoutParams(Dp(44), Dp(44)) { RightMargin = Dp(4) });
-                row.AddView(downBtn, new LinearLayout.LayoutParams(Dp(44), Dp(44)) { RightMargin = Dp(6) });
-
-                Switch visSw = new(this) {
-                    Checked = entry.Locked || entry.Visible,
-                    Enabled = !entry.Locked
-                };
-                visSw.SetMinimumWidth(Dp(48));
-                visSw.SetMinimumHeight(Dp(44));
-                visSw.CheckedChange += (_, ev) => {
-                    if (active.SetVisible(blockId, ev.IsChecked)) {
-                        PersistAndApply();
-                    }
-                };
-                row.AddView(visSw, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
-
-                listHost.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-                    BottomMargin = Dp(7)
-                });
+        public bool OnTouch(View v, MotionEvent e) {
+            bool editActive = isRoomTab ? owner.isRoomModularEditMode : owner.isPlayModularEditMode;
+            if (!editActive || e == null) {
+                return false;
             }
+            switch (e.ActionMasked) {
+                case MotionEventActions.Down:
+                    lastRawY = e.RawY;
+                    accumDy = 0f;
+                    dragging = true;
+                    v.Parent?.RequestDisallowInterceptTouchEvent(true);
+                    v.PerformHapticFeedback(FeedbackConstants.LongPress);
+                    v.Elevation = owner.Dp((int)OneUiTheme.QsEditLiftElevationDp);
+                    v.Animate()
+                        .ScaleX(OneUiTheme.QsEditLiftScale)
+                        .ScaleY(OneUiTheme.QsEditLiftScale)
+                        .Alpha(0.94f)
+                        .SetDuration(120)
+                        .Start();
+                    return true;
+
+                case MotionEventActions.Move:
+                    if (!dragging) {
+                        return false;
+                    }
+                    float stepY = e.RawY - lastRawY;
+                    lastRawY = e.RawY;
+                    accumDy += stepY;
+                    v.TranslationY = Math.Clamp(accumDy, -owner.Dp(72), owner.Dp(72));
+
+                    float swapThreshold = Math.Max(owner.Dp(48), blockView.Height * 0.45f);
+                    if (accumDy > swapThreshold) {
+                        accumDy = 0f;
+                        v.TranslationY = 0f;
+                        v.PerformHapticFeedback(FeedbackConstants.ClockTick);
+                        owner.SwapModularBlockByDrag(isRoomTab, blockId, +1);
+                    } else if (accumDy < -swapThreshold) {
+                        accumDy = 0f;
+                        v.TranslationY = 0f;
+                        v.PerformHapticFeedback(FeedbackConstants.ClockTick);
+                        owner.SwapModularBlockByDrag(isRoomTab, blockId, -1);
+                    }
+                    return true;
+
+                case MotionEventActions.Up:
+                case MotionEventActions.Cancel:
+                    if (!dragging) {
+                        return false;
+                    }
+                    dragging = false;
+                    v.Parent?.RequestDisallowInterceptTouchEvent(false);
+                    v.Elevation = 0f;
+                    v.Animate()
+                        .TranslationY(0f)
+                        .ScaleX(0.97f)
+                        .ScaleY(0.97f)
+                        .Alpha(1f)
+                        .SetDuration(OneUiTheme.QsEditSettleMs)
+                        .SetInterpolator(new PathInterpolator(0.22f, 1f, 0.36f, 1f))
+                        .Start();
+                    return true;
+            }
+            return false;
         }
-
-        RebuildRows();
-
-        Button resetBtn = PillButton(S["ModLayoutResetBtn"], () => {
-            active.ResetFrom(defaults);
-            PersistAndApply();
-            RebuildRows();
-            ShowToast(S["ModLayoutResetToast"]);
-        });
-        resetBtn.SetMinimumHeight(Dp(44));
-        content.AddView(resetBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-
-        OneUiModalDialog.Show(
-            this,
-            isRoomTab ? S["ModLayoutRoomTitle"] : S["ModLayoutPlayTitle"],
-            customContent: content,
-            icon: OneUiIconType.Sliders,
-            iconBadgeColor: OneUiTheme.IconSpatial,
-            positiveText: S["BtnDone"]);
     }
 
-    Button MakeModularMoveBtn(string glyph, bool enabled, Action onClick) {
-        Button b = new(this) {
-            Text = glyph,
-            TextSize = 15f,
-            Enabled = enabled,
-            Alpha = enabled ? 1f : 0.32f
-        };
-        b.SetAllCaps(false);
-        b.SetPadding(0, 0, 0, 0);
-        b.SetMinimumWidth(Dp(44));
-        b.SetMinimumHeight(Dp(44));
-        b.SetTextColor(enabled ? OneUiTheme.TextPrimary : OneUiTheme.TextMuted);
-        b.Background = OneUiTheme.CreateRoundedDrawable(
-            this,
-            enabled ? OneUiTheme.SurfaceElevated : OneUiTheme.SurfaceModalRow,
-            12f,
-            OneUiTheme.BorderSubtle,
-            1f);
-        if (enabled) {
-            OneUiTheme.AttachRecoil(b, 0.90f);
-            b.Click += (_, _) => onClick?.Invoke();
-        }
-        return b;
-    }
-
+    /// <summary>
+    /// Lightweight Settings card explaining direct long-press-border drag-reorder with 1-tap reset (zero legacy ↑/↓ dialog).
+    /// </summary>
     LinearLayout BuildSettingsModularLayoutCard() {
         LinearLayout card = Card(S["ModLayoutCardTitle"], OneUiIconType.Sliders, OneUiTheme.IconSpatial);
-        TextView desc = Label(S["ModLayoutCardDesc"], 12f, OneUiTheme.TextSub);
-        card.AddView(desc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(10)
-        });
+        TextView desc = new(this) { Text = S["ModLayoutDragSettingsDesc"], TextSize = 12.2f };
+        desc.SetTextColor(OneUiTheme.TextSub);
+        desc.SetPadding(0, 0, 0, Dp(10));
+        card.AddView(desc);
 
         LinearLayout btnRow = HRow();
-        btnRow.BaselineAligned = false;
-        Button playBtn = PillButton(S["ModLayoutEditPlayBtn"], () => ShowModularLayoutEditorDialog(isRoomTab: false));
-        playBtn.SetMinimumHeight(Dp(44));
-        Button roomBtn = PillButton(S["ModLayoutEditRoomBtn"], () => ShowModularLayoutEditorDialog(isRoomTab: true));
-        roomBtn.SetMinimumHeight(Dp(44));
-
-        btnRow.AddView(playBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
-        btnRow.AddView(roomBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        card.AddView(btnRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        Button resetPlayBtn = PillButton(S["ModLayoutResetPlayBtn"], () => {
+            ResetModularLayoutToDefault(isRoomTab: false);
+            ShowToast(S["ModLayoutResetToast"]);
+        });
+        resetPlayBtn.SetMinimumHeight(Dp(44));
+        Button resetRoomBtn = PillButton(S["ModLayoutResetRoomBtn"], () => {
+            ResetModularLayoutToDefault(isRoomTab: true);
+            ShowToast(S["ModLayoutResetToast"]);
+        });
+        resetRoomBtn.SetMinimumHeight(Dp(44));
+        btnRow.AddView(resetPlayBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+        btnRow.AddView(resetRoomBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        card.AddView(btnRow);
         return card;
     }
 }

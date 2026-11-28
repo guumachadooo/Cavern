@@ -1778,6 +1778,21 @@ public sealed partial class AppSettingsStore {
         set { }
     }
 
+    public bool FilterStudioEnabled {
+        get => prefs.GetBoolean("filterStudioEnabled", false);
+        set => Edit().PutBoolean("filterStudioEnabled", value).Apply();
+    }
+
+    public bool FilterStudioNyquistMatched {
+        get => prefs.GetBoolean("filterStudioNyquistMatched", true);
+        set => Edit().PutBoolean("filterStudioNyquistMatched", value).Apply();
+    }
+
+    public string FilterStudioBandsJson {
+        get => prefs.GetString("filterStudioBandsJson", "") ?? "";
+        set => Edit().PutString("filterStudioBandsJson", value ?? "").Apply();
+    }
+
     ISharedPreferencesEditor Edit() => prefs.Edit();
 
     public void ApplyGlobals() {

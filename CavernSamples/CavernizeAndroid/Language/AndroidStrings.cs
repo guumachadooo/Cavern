@@ -90,8 +90,6 @@ public sealed partial class AndroidStrings {
         ["TabConvert"] = "Studio",
         ["TabExtract"] = "Stems",
         ["TabSettings"] = "Settings",
-
-        // Casual Music Player
         ["PlayerEmptyTitle"] = "Ready to Listen",
         ["PlayerEmptySub"] = "Open TrueHD Atmos, E-AC-3 Atmos, MKV, MP4, FLAC, or WAV",
         ["PlayerOpenRoom"] = "Customize in 3D Room",
@@ -117,8 +115,6 @@ public sealed partial class AndroidStrings {
         ["VideoLockedMsg"] = "Controls Locked",
         ["VideoUnlockHint"] = "Unlock",
         ["RoomResetAll"] = "Reset Position & Head",
-
-        // In-App Library & Online Metadata Search (Samsung Music + Poweramp + Kodi)
         ["PlayerNowPlaying"] = "Now Playing",
         ["PlayerLibrary"] = "Library",
         ["LibAlbums"] = "Albums",
@@ -247,8 +243,6 @@ public sealed partial class AndroidStrings {
         ["FormatSwitchLabel"] = "Format:",
         ["FormatSwitchedToast"] = "Switched to {0}",
         ["PlayerTechInfo"] = "Technical & Codec Details",
-
-        // Player & Room
         ["RoomTitle"] = "3D Room",
         ["PresetCenter"] = "Center",
         ["PresetFront"] = "Front",
@@ -276,8 +270,6 @@ public sealed partial class AndroidStrings {
         ["FilterBedsOnly"] = "Beds Only",
         ["MixerTitle"] = "Live Channels & 3D Objects (Solo / Mute)",
         ["ClearSoloMute"] = "Reset Solo/Mute",
-
-        // Converter
         ["SystemTitle"] = "System & Output Target",
         ["RenderTarget"] = "Render target:",
         ["SelectTarget"] = "Choose Layout...",
@@ -298,8 +290,6 @@ public sealed partial class AndroidStrings {
         ["ReportDone"] = "Analysis complete! Check the Post-Render Report.",
         ["ShareFile"] = "Share",
         ["OpenPlayer"] = "Open in Player",
-
-        // Extractor
         ["ExtractTitle"] = "Channel & 3D Object Stem Extractor",
         ["ExtractDesc"] = "Separate every bed channel and every 3D object into individual WAV files (works with Dolby TrueHD Atmos, E-AC-3 JOC, ADM BWF, DAMF, LAF, WAV, CAF).",
         ["ExtractMode"] = "Extraction mode:",
@@ -318,8 +308,6 @@ public sealed partial class AndroidStrings {
         ["CancelBtn"] = "Cancel",
         ["CloseBtn"] = "Close",
         ["ExtractDone"] = "Extracted {0} file(s) to {1}",
-
-        // Queue & Settings
         ["QueueTitle"] = "Render Queue",
         ["BatchAddBtn"] = "Batch Add Files",
         ["RemoveQueueBtn"] = "Remove",
@@ -360,8 +348,6 @@ public sealed partial class AndroidStrings {
         ["UserGuideBtn"] = "Online User Guide",
         ["AboutBtn"] = "About Cavernize",
         ["StoragePermBtn"] = "Grant Full File Access (for large MKV / .atmos)",
-
-        // Wiring & Messages
         ["WrGui"] = "Wiring Guide",
         ["ChCon"] = "Connect the {0} speaker to your system's {1} output.",
         ["ChCMx"] = "Connect the {0} speaker's + terminal to {1}'s + and - terminal to {2}'s +.",
@@ -383,8 +369,6 @@ public sealed partial class AndroidStrings {
         ["TrueHDCancelled"] = "TrueHD decoding cancelled.",
         ["TrueHDContainerNeedTools"] = "This video/MKV uses an audio format (such as Dolby TrueHD or DTS) that Android cannot decode natively. Check bundled FFmpeg & truehdd status in Settings.",
         ["OpenSettingsBtn"] = "Open Settings",
-
-        // Room Stability & Fine-Tuning
         ["LockRoom"] = "Lock Position",
         ["UnlockRoom"] = "Position Locked",
         ["FineTuneBtn"] = "Fine-tune Position & Head",
@@ -528,8 +512,6 @@ public sealed partial class AndroidStrings {
         ["PipelineStageRendering"] = "Stage 3/4 · Spatial 3D Rendering & DSP",
         ["PipelineStageExporting"] = "Stage 4/4 · Encoding & Finalizing Output",
         ["PipelineStageDone"] = "Pipeline Complete · Ready to Play or Share",
-
-        // App Auto-Updater
         ["UpdateCardTitle"] = "Software Update",
         ["CurrentVersionLabel"] = "Installed version: v{0}",
         ["CheckUpdateBtn"] = "Check for updates",
@@ -543,8 +525,6 @@ public sealed partial class AndroidStrings {
         ["AutoCheckSwitch"] = "Check for updates automatically",
         ["AllowUnknownSourcesMsg"] = "Allow 'Install unknown apps' for Cavernize, then return to complete the installation.",
         ["DismissBtn"] = "Later",
-
-        // FFmpeg Built-in Engine
         ["FFmpegCardTitle"] = "FFmpeg Audio Engine",
         ["FFmpegNotInstalled"] = "Built-in FFmpeg engine is unavailable on this installation (needed for E-AC-3, AC-3, FLAC, Opus, MKV muxing)",
         ["FFmpegInstalledVer"] = "Built-in Engine: {0} (Ready)",
@@ -555,8 +535,6 @@ public sealed partial class AndroidStrings {
         ["FFmpegManualBtn"] = "Built-in Engine",
         ["FFmpegDownloading"] = "Checking built-in FFmpeg engine...",
         ["FFmpegUpToDate"] = "Built-in FFmpeg ready ({0}).",
-
-        // TrueHD Built-in Engine
         ["TruehddCardTitle"] = "Dolby TrueHD Engine (truehdd)",
         ["TruehddNotInstalled"] = "Built-in truehdd engine is unavailable on this installation (needed for Dolby TrueHD & Atmos)",
         ["TruehddInstalledVer"] = "Built-in Engine: v{0} (Ready)",
@@ -568,8 +546,6 @@ public sealed partial class AndroidStrings {
         ["TruehddDownloading"] = "Checking built-in truehdd engine...",
         ["TruehddUpToDate"] = "Built-in truehdd ready (v{0}).",
         ["TipTruehdd"] = "Official ARM64 truehdd decoder built directly into the app. Decodes lossless Dolby TrueHD and Atmos 3D objects into DAMF/CAF in private temporary storage and cleans cache automatically.",
-
-        // One UI 9 Section Titles & Bento Tiles
         ["QuickPanelTitle"] = "Quick Spatial Panel",
         ["BentoHrtf"] = "HRTF 3D",
         ["BentoDist"] = "Ear Distance",
@@ -583,8 +559,6 @@ public sealed partial class AndroidStrings {
         ["FileDetailsHint"] = "Technical stream details",
         ["OpenShort"] = "Open",
         ["RoomTouchHint"] = "Drag room to orbit camera • Drag listener • Tap speakers for Solo",
-
-        // Individual Technical Option Tooltips (cause & effect)
         ["TipHrtf"] = "Simulates virtual surround speakers around your head on headphones.\n\n• On: full 3D binaural staging.\n• Off: direct mix without ear HRTF filtering (use on physical speakers).",
         ["TipDistSim"] = "Tap to cycle directly through the 5 real laboratory loudspeaker distances (TH Köln KU100 DFC: 0.50 m, 0.75 m, 1.00 m, 1.50 m, and 3.25 m).\n\nShown only when a profile with variable laboratory distances is active.",
         ["TipRolloff"] = "Sets how fast distant objects drop in volume:\n• Logarithmic / Real (1/d): stronger near-vs-far depth contrast.\n• Linear: gentle uniform decay.\n• Disabled: constant loudness regardless of distance.",
@@ -614,8 +588,6 @@ public sealed partial class AndroidStrings {
         ["TipExtractModes"] = "• Original Separated: 1 raw mono WAV per bed channel and 3D object.\n• Render Each in 3D: renders each selected item separately in your target 3D layout.\n• 3D Combined: exports all checked 3D objects together.\n• Raw Bitstream: demuxes untouched stream via --extract.",
         ["TipExtractJson"] = "Saves a .json sidecar with frame-by-frame (X, Y, Z) 3D trajectories for dynamic objects.",
         ["TipFFmpegArgs"] = "Additional CLI arguments forwarded directly to FFmpeg when encoding output (e.g. -b:a 960k for higher bitrate).",
-
-        // Official Binaural Profiles (SADIE II D1/D2, TH Köln KU100, SOFA)
         ["PlayerDirectShort"] = "Direct 2.0",
         ["BinauralProfileTitle"] = "Binaural Profile (HRIR / BRIR)",
         ["BinauralProfileActive"] = "Active profile",
@@ -659,8 +631,6 @@ public sealed partial class AndroidStrings {
         ["ProfCustom"] = "Custom HRIR / SOFA",
         ["ProfCustomSub"] = "User-imported .sofa or .wav measurement file",
         ["TipBinauralProfile"] = "Selects the laboratory-measured HRIR or BRIR dataset used to spatialize surround and Dolby Atmos audio on headphones (100% offline, neutral unity-gain engine, zero artificial EQ).\n\n• HRIR: clean anechoic headphone staging.\n• BRIR: includes diffuse-field compensated real measured studio room reflections.\n• Direct 2.0: bypasses HRTF cleanly while keeping full LFE bass.",
-
-        // Laboratory Distance Selector, Global Minimum-Phase + ITD, Dynamic Ceiling Filter & Scientific Audio Quality UI
         ["BinauralDistDirect"] = "Direct 2.0",
         ["BinauralDistFixedTag"] = "Fixed",
         ["BinauralDistModalTitle"] = "Laboratory Distance (HRIR)",
@@ -696,8 +666,6 @@ public sealed partial class AndroidStrings {
         ["QualityClippingWarn"] = "Hard clipping detected ({0}% full-scale peaks)",
         ["QualityAnalyzing"] = "Analyzing real PCM spectrum and bit-depth in background...",
         ["AudioStreamsSection"] = "Audio Streams in File",
-
-        // Slot 6A: AutoEq Neutral Headphone Engine & Auto-Profile per Device
         ["AutoEqEnableTitle"] = "AutoEq Neutral Headphone EQ",
         ["AutoEqModalTitle"] = "Select Headphone (AutoEq)",
         ["AutoEqNoneSelected"] = "No headphone profile selected",
@@ -734,8 +702,6 @@ public sealed partial class AndroidStrings {
         ["TipAutoEqTarget"] = "Chooses how your calibrated headphone should sound:\n• Balanced Studio (Default): full natural bass and balanced vocals/treble.\n• Natural In-Room (JM-1): warm speaker-in-room balance with smoother highs.\n• Light Bass: gentle sub-bass trim for analytical listening.\n• Flat Reference / 5128 Flat: bare lab curves with no room bass (sound bass-lean vs speakers).",
         ["TipAutoEqDoubleEqGuard"] = "Automatically detects when a Raw uncompensated HRIR (such as TH Köln Far-Field Raw) is active and applies the exact inverse ISO 11904-1 Diffuse-Field transform so ear-canal/pinna resonance is never double-equalized.",
         ["TipAutoEqAutoDevice"] = "Uses Android's native AudioDeviceCallback to remember and automatically switch your AutoEq model, target curve, binaural HRIR profile, and head-tracking preference whenever Bluetooth, USB-C DAC, 3.5mm, or Built-in Speaker connects.",
-
-        // Slot 4: Low-Latency Audio, USB DAC & 3DoF/6DoF Head Tracking
         ["Slot4CardTitle"] = "Low-Latency Audio, USB DAC & Head Tracking",
         ["LowLatencyAudioTitle"] = "Low-Latency AudioTrack (Zero-GC 256f)",
         ["UsbDacNativeSrTitle"] = "USB DAC Native Sample Rate & Float32",
@@ -778,8 +744,6 @@ public sealed partial class AndroidStrings {
         ["TipUsbDacNativeSr"] = "Routes Direct 2.0 playback explicitly to connected USB-C DACs via SetPreferredDevice using 32-bit IEEE Float (PcmFloat) and native sample rates (44.1–192 kHz). Headphone HRTF remains locked to 48 kHz to preserve laboratory HRIR accuracy.",
         ["TipHeadTracking"] = "Rotates the 3D acoustic room in real time with your head using Samsung Galaxy Buds RFCOMM quaternions, Android 6-axis IMU (GameRotationVector / Fusion AHRS), or external BLE / UDP OSC trackers (Mr. Headtracker, IEM, SPARTA, OpenTrack).",
         ["TipHeadTrackingPredict"] = "Extrapolates quaternion orientation forward on SO(3) using filtered angular velocity to compensate Bluetooth/audio buffer latency (recommended: 15–35 ms for wired/USB, 45–80 ms for Bluetooth).",
-
-        // Slot 5A: Physical Externalization (ISM Room, Near-Field DVF & ISO 9613-1)
         ["Slot5ACardTitle"] = "Physical Externalization (ISM Room & Physics)",
         ["IsmRoomEnableTitle"] = "Real-Time ISM Early Reflections",
         ["IsmRoomPresetTitle"] = "Room Architecture",
@@ -865,8 +829,6 @@ public sealed partial class AndroidStrings {
         ["HrtfWizAppliedToast"] = "Personalized HRTF profile saved and applied.",
         ["HptfTonePlayingToast"] = "Playing safe -18 dBFS HpTF tone at {0:0} Hz...",
         ["HptfSweepPlayingToast"] = "Playing safe -18 dBFS 6–10 kHz ear-canal sweep...",
-
-        // Slot 6B: Psychoacoustics & Studio Loudness Standards (ISO 226:2023, ITU-R BS.1770-5 / EBU R128, Spatial Dialog, 4x True-Peak Limiter)
         ["Slot6BCardTitle"] = "Loudness, Psychoacoustics & Limiter",
         ["LoudnessMeterIdle"] = "BS.1770-5 Meter: waiting for audio · Ceiling {0:0.#} dBTP",
         ["LoudnessMeterLive"] = "M {0} · S {1} · I {2} LUFS · LRA {3:0.0} LU · TP {4:0.0} dBTP{5}{6}",
@@ -893,8 +855,6 @@ public sealed partial class AndroidStrings {
         ["TruePeakCeil20"] = "-2.0 dBTP (Conservative DAC Margin)",
         ["LoudnessResetMeterBtn"] = "Reset BS.1770 Meter",
         ["LoudnessMeterResetToast"] = "ITU-R BS.1770-5 Integrated LUFS & LRA meter reset.",
-
-        // On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact Pipeline & Spatial Karaoke
         ["Slot2BCardTitle"] = "Neural Audio, Stems & Karaoke",
         ["NeuralRuntimeNotInstalled"] = "Built-in ONNX Runtime neural engine is unavailable on this installation",
         ["NeuralRuntimeInstalled"] = "ONNX Runtime {0} · {1} · {2} model(s) · {3:0.0} MB",
@@ -977,8 +937,6 @@ public sealed partial class AndroidStrings {
         ["TipMvsepPhaseFix"] = "Reprojects neural stem magnitudes onto the original mixture complex phase via Wiener partition of unity, preventing phasey metallic ringing.",
         ["TipSpatialKaraoke"] = "Applies a shared real-valued zero-phase Wiener mask across all 1..32 Atmos beds and dynamic objects simultaneously, preserving 0.000 deg inter-channel phase coherence, LFE bass, and 3D trajectories. 100% is a bit-exact bypass.",
         ["TipNeuralUpmix"] = "Places separated neural stems (Vocals, Drums, Bass, Other, Residual) in 3D space or renders an energy-conserving 12-channel 7.1.4 Hybrid Neural + DirAC master.",
-
-        // Slot 2C: Universal Lossless Twin & Lossless-Guided Atmos Restoration (LGSR, W09)
         ["Slot2CCardTitle"] = "Lossless-Guided Atmos Restoration",
         ["LgsrStatusSearching"] = "Searching and sub-sample aligning lossless FLAC/WAV/ALAC twin...",
         ["LgsrStatusNone"] = "No paired lossless twin active (auto-pairs when FLAC/WAV/ALAC twin exists)",
@@ -1007,8 +965,6 @@ public sealed partial class AndroidStrings {
         ["TipLgsrClippingGuard"] = "Continuously scans the stereo lossless twin with a 4x True-Peak detector and flat-top clip guard, smoothly backing off fusion whenever brickwall clipping is detected.",
         ["TipLgsrBitstreamGuide"] = "Reads live per-block E-AC-3 Coupling and Spectral Extension (SPX) start frequencies directly from the decoder bitstream to focus restoration exactly where lossy compression starts.",
         ["TipLgsrTier3Cleanup"] = "During offline EM-MWF Studio Master export, applies an installed Apollo or AP-BWE ONNX model to clean compression artifacts in the conserved Atmos-exclusive residual.",
-
-        // Slot 1 / Slot 4: W10 Pro-Audio Full-Duplex USB Engine (Path B libusb UAC2 + Path A AAudio Exclusive + Scarlett 2i2)
         ["ProAudioCardTitle"] = "Pro-Audio USB Full-Duplex & Scarlett 2i2",
         ["ProAudioEnableTitle"] = "Enable Pro-Audio Full-Duplex USB Engine",
         ["TipProAudioEngine"] = "Runs a clean-room unrooted libusb-1.0 UAC2 isochronous full-duplex driver (Path B, bypassing Android AudioFlinger) with automatic fallback to native AAudio LOW_LATENCY + EXCLUSIVE full-duplex (Path A) and zero-GC AudioTrack. Enables sub-6 ms live microphone monitoring with Spatial Karaoke.",
@@ -1096,8 +1052,6 @@ public sealed partial class AndroidStrings {
         ["ScarlettGainAssistBtn"] = "Gain Assist (-12 dBFS)",
         ["ScarlettGainAssistFormat"] = "Gain Assist (-12 dBFS target): Ch 1 → {0:0.0} dB · Ch 2 → {1:0.0} dB",
         ["ScarlettGainAssistNoSignalToast"] = "Play or sing into the microphone first so Gain Assist can measure input peak.",
-
-        // W12 Next-Gen Formats & Studio Batch Exporter
         ["StudioW12CardTitle"] = "Studio Master Presets",
         ["StudioW12PresetLabel"] = "Master Workflow",
         ["StudioW12ExportBtn"] = "Export Master",
@@ -1110,8 +1064,6 @@ public sealed partial class AndroidStrings {
         ["StudioW12PresetLiveMixdown"] = "Recorded Vocal Performance Mix (.wav)",
         ["StudioW12PresetFlacAtmos"] = "Atmos + Lossless Twin Master (.wav)",
         ["StudioW12DoneFormat"] = "Master exported: {0} ({1:0.0} LUFS · {2:0.0} dBTP)",
-
-        // W13 6DoF Walkable 3D Room & Studio Spatial X-Ray Inspector
         ["XRayInspectorTitle"] = "Spatial X-Ray Inspector",
         ["XRayInspectorShowBtn"] = "Open X-Ray HUD",
         ["XRayInspectorHideBtn"] = "Hide X-Ray HUD",
@@ -1132,8 +1084,6 @@ public sealed partial class AndroidStrings {
         ["XRayLgsrBypassBtn"] = "LGSR A/B",
         ["XRayVocalBypassBtn"] = "Vocal A/B",
         ["FilterStemsMicOnly"] = "Stems & Mic",
-
-        // W14 Full One UI 9 UX Integration (Lyrics Sing, ATMOS+FLAC A/B, Auto-Vocal Mix-Match, Studio & Settings)
         ["SingVocalLevelTitle"] = "Vocals",
         ["SingMicMixMatchBtn"] = "Mix-Match",
         ["SingMicLiveBadge"] = "MIC ON",
@@ -1166,8 +1116,6 @@ public sealed partial class AndroidStrings {
         ["NoCodecMetadata"] = "No detailed codec metadata available for this track.",
         ["FinalizingFormat"] = "Finalizing output format...",
         ["CancelledStatus"] = "Cancelled.",
-
-        // W18 Live Neural 3D Stems Prep, Pre-HRTF Karaoke & Parametric/Atmos-Aware Upmix Controls
         ["ParametricStftUpmix"] = "Parametric STFT / DirAC Upmix",
         ["TipParametricStftUpmix"] = "Uses true 1024-pt STFT Direct/Ambient (DirAC) decomposition with 4x overlap-add and inter-channel coherence to extract height & surround ambience without phase cancellations.",
         ["AtmosAwareUpmix"] = "Atmos-Aware Bed Ambient Enhancement",
@@ -1184,8 +1132,6 @@ public sealed partial class AndroidStrings {
         ["NeuralPrepNoTrackToast"] = "Load a track first to prepare AI neural stems.",
         ["NeuralPrepFailedFmt"] = "AI stem preparation failed: {0}",
         ["NeuralLiveStemsActiveFmt"] = "Live AI 3D active: {0} stems ({1})",
-
-        // W19.b End-to-End Auto-Vocal Mix-Match, Song Vocal DNA & Guided Mic Voiceprint
         ["VocalAbStateWet"] = "A/B: Processed",
         ["VocalAbStateDry"] = "A/B: Dry Bypass",
         ["SingVocalAbWet"] = "A/B FX",
@@ -1213,8 +1159,6 @@ public sealed partial class AndroidStrings {
         ["VocalSingDockNeutralFmt"] = "Live Vocal Chain: Neutral baseline · {0}",
         ["VocalSingDockVpOn"] = "Voiceprint ON",
         ["VocalSingDockVpOff"] = "Flat 0 dB EQ",
-
-        // W20 Offline Studio Batch Exporter, EM-MWF & Extractor Neural Chain, TrueHD & Decoder Localization
         ["ExportCardTitle"] = "Export",
         ["StudioW12BatchBtn"] = "Batch Export Presets...",
         ["StudioW12BatchDialogTitle"] = "Studio Batch Export",
@@ -1495,8 +1439,6 @@ public sealed partial class AndroidStrings {
         ["AboutDialogBodyFmt"] = "{0}\nCavernize Android v{1} (build {2})\n{3}\n{4}",
         ["QueueUnsupportedFilesFmt"] = "Unsupported files:\n{0}",
         ["QueueEmptyZeroJobs"] = "0 jobs in queue",
-
-        // W27 2-Tier Sing Dock, Audio Spec A/B, Quality Note & Guided Modal Help
         ["SingDockDnaActivePill"] = "Vocal DNA Active",
         ["SingDockDnaIdlePill"] = "Vocal DNA: Neutral",
         ["SingDockKaraokeCenterPill"] = "Karaoke: Center (Instant)",
@@ -1537,8 +1479,6 @@ public sealed partial class AndroidStrings {
         ["LyricsSingToggleDesc"] = "Show or hide Karaoke & Live Mic controls",
         ["LibraryLoadingCached"] = "Loading library...",
         ["MediaDecodeFailedCorrupt"] = "Could not decode this audio file. It may be corrupted or use an unsupported codec.",
-
-        // W48 Direct Play-Tab AI Toggle, Studio Performance Recorder & Composable Export Builder
         ["PlayTabAiOffShort"] = "AI 3D",
         ["PlayTabAi3DShort"] = "AI 3D",
         ["PlayTabAi714Short"] = "AI 7.1.4",
@@ -1555,7 +1495,6 @@ public sealed partial class AndroidStrings {
         ["PlayTabAiModeOff"] = "Off (Standard Playback)",
         ["PlayTabAiModeStems3D"] = "AI 3D Stems (Instruments in 3D + Sub)",
         ["PlayTabAiModeHybrid714"] = "AI Cinema 7.1.4 (Surround + Heights + Sub)",
-
         ["StudioRecCardTitle"] = "Vocal Performance Recorder",
         ["StudioRecCardSub"] = "Record your voice over the active track, preview the mix, and combine it with any export format below.",
         ["StudioRecStatusIdle"] = "Ready — tap Record to sing over this track",
@@ -1575,7 +1514,6 @@ public sealed partial class AndroidStrings {
         ["StudioRecNeedTakeToast"] = "Record a vocal performance take above first, or turn off 'Include Recorded Vocal Take'.",
         ["StudioRecPreviewingToast"] = "Playing your recorded take with automatic studio vocal polish.",
         ["StudioRecDiscardedToast"] = "Recorded take discarded.",
-
         ["StudioExportBuilderTitle"] = "Spatial Export Builder",
         ["StudioExportFormatLabel"] = "Output Format",
         ["StudioExportModulesHeader"] = "Mix & Enhance Options (Combine Freely)",
@@ -1607,8 +1545,6 @@ public sealed partial class AndroidStrings {
         ["StudioTagVocalTake"] = "Vocal Take",
         ["StudioTagLosslessTwin"] = "Lossless Twin",
         ["StudioExportRecipeSummaryFmt"] = "Export recipe: {0} · Ceiling {1:0.0} dBTP",
-
-        // W50 Mic Source Selector, Sing Dock Mic Pill & Scarlett Gen 4 FCP Verified Badge
         ["ProAudioMicSourceTitle"] = "Microphone Input Source",
         ["ProAudioMicSrcPhone"] = "Phone Mic (Built-in)",
         ["ProAudioMicSrcUsb"] = "USB Interface Mic (e.g. Scarlett)",
@@ -1619,8 +1555,6 @@ public sealed partial class AndroidStrings {
         ["SingDockMicSrcUsbChip"] = "USB Mic",
         ["SingDockMicSrcAutoChip"] = "Mic: Auto",
         ["ScarlettGen4VerifiedBadgeFmt"] = "Gen 4 FCP Verified (FW {0})",
-
-        // Wave 2B Studio Compression Tier, Foreground Export & 3D Object Choreography
         ["StudioCompressionTierLabel"] = "Compression & Quality",
         ["TipStudioCompressionTier"] = "Choose how the exported spatial master is packaged:\n\n• Master PCM: uncompressed studio PCM WAV, IAMF, or AMB.\n• Lossless: smaller bit-exact lossless FLAC / compressed container (no LGSR twin required).\n• Portable Lossy: compact Opus / E-AC-3 for mobile sharing.",
         ["StudioTierMasterPcm"] = "Master PCM",
@@ -1639,8 +1573,6 @@ public sealed partial class AndroidStrings {
         ["SpatialChoreoMusical"] = "Musical",
         ["SpatialChoreoCinematic"] = "Cinematic",
         ["SpatialChoreoOrbit"] = "Orbit",
-
-        // Stage 3 (T3): SOTA RoFormer AI, Pure Instrumental, MVSEP Cloud Offload, Studio Bundles & CNTC v3 Smart Cache
         ["SaveBtn"] = "Save",
         ["NeuralExecBackendTitle"] = "AI Separation Engine",
         ["NeuralExecBackendOnDevice"] = "On-Device ONNX (Offline)",
@@ -1698,7 +1630,6 @@ public sealed partial class AndroidStrings {
         ["StudioOptRemoveBackingTitle"] = "Remove Backing Vocals (Pure Instrumental)",
         ["StudioOptRemoveBackingDesc"] = "Removes BOTH lead and backing harmonies for a clean instrumental master without affecting instruments.",
         ["StudioTagPureInstrFmt"] = "Pure Instrumental ({0}%)",
-        // Master Overhaul T4: Play Spatial Hierarchy, Motion Clarity, 3D Drag, Lyrics & Universal (i) Help
         ["PlayTabUpmixDirectShort"] = "Direct",
         ["PlayTabUpmixMatrixShort"] = "Matrix 7.1",
         ["PlayTabUpmix3DShort"] = "Cavernize 3D",
@@ -1741,7 +1672,6 @@ public sealed partial class AndroidStrings {
         ["TipHeadTrackerSource"] = "Selects which sensor feeds live 3DoF head rotation into the 3D binaural room: Manual slider, Samsung Galaxy Buds IMU, Android phone IMU, or external BLE/OSC tracker.",
         ["TipProAudioPath"] = "Chooses the audio transport engine for full-duplex monitoring and USB DACs:\n\n• Auto: Picks lowest-latency verified path.\n• Path B (libusb UAC2): Direct bit-perfect USB audio bypassing Android mixer.\n• Path A (AAudio Exclusive): Native Android ultra-low-latency path.\n• Legacy: Standard AudioTrack fallback.",
         ["TipProAudioBuffer"] = "Audio callback block size in frames. Smaller buffers (64/128) reduce live microphone monitoring latency; 256 provides extra stability against XRun glitches.",
-        // Master Overhaul T5: Studio Dynamic Atmos Motion, Metadata/Cover/Lyrics Embedding & Public Export Hygiene
         ["StudioDynamicMotionLabel"] = "Dynamic Atmos Object Motion:",
         ["TipStudioDynamicMotion"] = "Exports real moving 3D spatial objects (time-varying ITU-R BS.2076 ADM trajectories, dynamic Eclipsa IAMF, HOA 360°, or Binaural 3D) from separated instruments while keeping LFE stationary.\n\n• Off (Static): Anchored ITU-R speaker positions.\n• Subtle: Gentle front and height breathing.\n• Musical: Beat and section-aligned 3D stage movement.\n• Cinematic: Wide surround and ceiling sweeps.\n• Orbit: Continuous spherical orbit around the listener.\n\nIndependent of your live 3D Room playback setting.",
         ["StudioExportDeliveryHeader"] = "Metadata, Artwork & Output Folder",
@@ -1763,7 +1693,6 @@ public sealed partial class AndroidStrings {
         ["LocateExportTitle"] = "Exported Files",
         ["ExportSavedToFmt"] = "Saved to: {0}",
         ["ExportCompatDownloadsBadge"] = "Container compat",
-        // BP UI/AI Organization, Compute Headroom, Grouped Ensemble & Cache-First Reuse
         ["NeuralReextractStemsBtn"] = "Re-extract Stems (Bypass Cache)",
         ["OpenAiSettingsBtn"] = "Open AI Settings",
         ["OpenAiSettingsShortBtn"] = "AI Settings",
@@ -1784,7 +1713,6 @@ public sealed partial class AndroidStrings {
         ["NeuralGroupNoneActive"] = "None",
         ["NeuralModelAutoActiveTag"] = "Auto Active",
         ["NeuralModelAutoLockedTag"] = "Auto-Managed",
-        // W51.2 / W51.3: Unified Atmos <-> FLAC AI Cache Status, Config Diff & Cache Controls
         ["AiCacheSectionTitle"] = "Song AI Cache (Dolby Atmos & FLAC)",
         ["AiCacheSharedNote"] = "AI stems are shared automatically between Dolby Atmos and FLAC versions of the same song.",
         ["AiCacheStatusCachedFmt"] = "Cached: {0} stems • {1:0.0} MB • extracted from {2}",
@@ -1810,10 +1738,8 @@ public sealed partial class AndroidStrings {
         ["AiCacheDiffFieldBackingVocals"] = "Backing Vocals",
         ["AiCacheDiffValKeepBacking"] = "Keep Backing",
         ["AiCacheDiffValPureInstr"] = "Pure Instrumental",
-        // RoFormer / ONNX Low-RAM Discipline & Automatic Lightweight Fallback
         ["NeuralLowRamFallbackToast"] = "Low RAM: completed with lightweight model ({0})",
         ["NeuralLowRamNeedLightModelFmt"] = "Not enough free RAM for this heavy AI model. Install a fast mobile model (SCNet / Kim Vocal) or use MVSEP Cloud. ({0})",
-        // W53.2 (Wave B): Unified Play/Sing AI Extraction Sheet, Multi-Variant Cache & Lossless Compaction
         ["AiCacheVariantsHeaderFmt"] = "{0} cached variant(s) for this song",
         ["AiCacheVariantRowFmt"] = "{0} • {1} stems • {2:0.0} MB ({3:0}% saved) • {4}",
         ["AiCacheVariantActiveBadge"] = "Active",
@@ -1827,8 +1753,6 @@ public sealed partial class AndroidStrings {
         ["AiCacheOptimizeDoneToastFmt"] = "Compacted {0} cache file(s), freed {1:0.0} MB.",
         ["AiCacheOptimizeAlreadyCompactToast"] = "AI cache is already compact.",
         ["AiCacheIncrementalReuseHint"] = "Cached vocals detected — Karaoke will reuse Stage 1 automatically.",
-
-        // Wave D (W53.4 / B10): One UI 9 Modular Editable Quick-Panel Layouts
         ["BtnDone"] = "Done",
         ["ModLayoutCardTitle"] = "Modular Control Layout (One UI 9)",
         ["ModLayoutCardDesc"] = "Reorder or hide control blocks in Play and 3D Room just like the One UI 9 Quick Panel. Essential playback blocks stay locked for safety.",
@@ -1855,8 +1779,6 @@ public sealed partial class AndroidStrings {
         ["ModBlockRoomXRay"] = "Spatial X-Ray Inspector HUD",
         ["ModBlockRoomQuickPanel"] = "Quick Spatial Panel & Sliders",
         ["ModBlockRoomMixer"] = "Live Channel & 3D Object Mixer",
-
-        // Wave E (W53.5 / B12): Mobile ONNX Precision (FP16 / W8A16) & SoC-Keyed QNN Context Binary Cache
         ["NeuralQuantModeTitle"] = "Mobile ONNX Weight Precision:",
         ["NeuralQuantAuto"] = "Auto (FP16 / W8A16 Heavy)",
         ["NeuralQuantFp32"] = "FP32 (Original Reference)",
@@ -1868,8 +1790,6 @@ public sealed partial class AndroidStrings {
         ["NeuralQnnCacheStatusFmt"] = "SoC: {0} · Cache: {1} file(s) ({2:0.0} MB)",
         ["NeuralQnnCacheClearBtn"] = "Clear QNN & Quantization Cache",
         ["NeuralQnnCacheClearedToast"] = "Cleared {0} cached ONNX optimization file(s).",
-
-        // Wave F (W53.6 / B13): Physical Transaural XTC Spatializer (Speakers) with Bit-Exact Headphone Bypass
         ["TransauralCardTitle"] = "Speaker Transaural 3D (XTC)",
         ["TransauralEnableTitle"] = "Enable Physical Crosstalk Cancellation",
         ["TipTransauralXtc"] = "Uses causal Bauck-Cooper / BACCH crosstalk cancellation to project a wide, out-of-the-speakers 3D binaural soundstage on built-in smartphone stereo speakers or external stereo speakers.",
@@ -1885,8 +1805,6 @@ public sealed partial class AndroidStrings {
         ["TransauralStatusOff"] = "Inactive — enable when listening on stereo loudspeakers",
         ["TransauralStatusHeadphoneBypass"] = "Bit-Exact Bypassed (Headphones connected)",
         ["TransauralStatusActive"] = "Active on Speakers · ±{0:0.0}° · Δτ {1:0} µs · ~{2:0.0} dB XTC",
-
-        // V4.1: Mandatory 2-step confirmation for all destructive delete/clear actions
         ["ConfirmDeleteTitle"] = "Confirm Deletion",
         ["ConfirmDeleteActionBtn"] = "Delete Permanently",
         ["ConfirmClearAllTracksMsg"] = "This will permanently delete ALL cached AI-separated and converted tracks from storage. Are you sure?",
@@ -1897,8 +1815,6 @@ public sealed partial class AndroidStrings {
         ["ConfirmClearMvsepTokenMsg"] = "Remove your saved MVSEP Cloud API token from this device?",
         ["ConfirmClearQnnCacheMsg"] = "Delete compiled Qualcomm QNN and quantized ONNX optimization cache files? They will be rebuilt on next run.",
         ["ConfirmRemoveQueueJobMsg"] = "Remove the last queued conversion job from the batch queue?",
-
-        // W55.3: Reactive Coordinator, Anti-Conflict Arbitration & Unified Local/Cloud AI Picker
         ["BentoSpeakerXtc"] = "Speaker XTC",
         ["TipBentoSpeakerXtc"] = "Toggles physical Bauck-Cooper / BACCH crosstalk cancellation (XTC) for built-in phone stereo speakers or external stereo speakers.",
         ["SpatialOutSpeakerXtcOnShort"] = "XTC 3D",
@@ -1956,5 +1872,57 @@ public sealed partial class AndroidStrings {
         ["ExportSubModeExtract"] = "Extract",
         ["ExportQueueCountFmt"] = "Queue ({0})",
         ["QueueEmpty"] = "No items in export queue.",
+        ["ModLayoutDragActiveHint"] = "Drag blocks to reorder",
+        ["ModLayoutDragToolbarHint"] = "Drag cards by their border to reorder",
+        ["ModLayoutDoneBtn"] = "Done",
+        ["ModLayoutDragSettingsDesc"] = "Long-press any card border on Library or 3D Stage to drag-reorder blocks in place, or reset below.",
+        ["ModLayoutResetPlayBtn"] = "Reset Library",
+        ["ModLayoutResetRoomBtn"] = "Reset 3D Stage",
+        ["FilterStudioTitle"] = "FilterStudio",
+        ["FilterStudioSubtitle"] = "Click-free Cytomic SVF & Nyquist-decramped parametric EQ.",
+        ["FilterStudioStateOn"] = "Active",
+        ["FilterStudioStateOff"] = "Bypassed",
+        ["FilterStudioNyquistTag"] = "Nyquist-Matched",
+        ["FilterStudioSummaryFmt"] = "{0} · {1} bands · {2}",
+        ["FilterStudioOpenBtn"] = "Open FilterStudio",
+        ["FilterStudioExportBtn"] = "Export EQ / FIR",
+        ["FilterStudioEnableToggle"] = "Enable FilterStudio EQ",
+        ["FilterStudioNyquistToggle"] = "Nyquist decramping (Vicanek matched)",
+        ["FilterStudioPhaseToggle"] = "Show phase response overlay",
+        ["FilterStudioTypeLabel"] = "Filter Type",
+        ["FilterStudioFreqLabel"] = "Frequency",
+        ["FilterStudioGainLabel"] = "Gain",
+        ["FilterStudioQLabel"] = "Q Factor",
+        ["FilterStudioAddBandBtn"] = "Band",
+        ["FilterStudioRemoveBandBtn"] = "Remove",
+        ["FilterStudioResetFlatBtn"] = "Reset Flat",
+        ["FilterStudioExportTitle"] = "Export FilterStudio Curve",
+        ["FilterStudioExportSubFmt"] = "{0} bands · {1} Hz · Auto preamp {2:+0.0;-0.0;0.0} dB",
+        ["FilterStudioExportSavedFmt"] = "Saved {0}",
+        ["ExportSubModeTools"] = "Tools",
+        ["ExportToolsReadyHint"] = "Pro mastering utilities: ADM BS.2076-2, E-AC-3 merge, WAV reorder, bed sync & raw extract.",
+        ["ToolAdmValidatorTitle"] = "ADM Validator (BS.2076-2)",
+        ["ToolAdmValidatorDesc"] = "Validate BWF WAV or standalone axml against ITU-R BS.2076-2 IDs, references, and timelines.",
+        ["ToolAdmValidatorBtn"] = "Validate ADM WAV / XML",
+        ["ToolEac3MergerTitle"] = "Enhanced AC-3 Merger",
+        ["ToolEac3MergerDesc"] = "Merge an independent 5.1 E-AC-3 base with a dependent substream up to 7.1 / 9.1.6.",
+        ["ToolPickTwoFilesHint"] = "Select both source files below to run.",
+        ["ToolPickBaseEac3Btn"] = "Pick Base E-AC-3",
+        ["ToolPickDepEac3Btn"] = "Pick Substream",
+        ["ToolRunEac3MergeBtn"] = "Merge E-AC-3 Streams",
+        ["ToolWavReorderTitle"] = "WAV Channel Reorderer",
+        ["ToolWavReorderDesc"] = "Remap multi-channel WAV ordering (SMPTE <-> Film, surround/stereo swaps) via InterlacedWaveformReorderer.",
+        ["ToolWavMapLabel"] = "Channel Mapping",
+        ["ToolRunWavReorderBtn"] = "Pick WAV & Reorder",
+        ["ToolOverrideBedTitle"] = "Lossless Bed Override (--override-bed)",
+        ["ToolOverrideBedDesc"] = "Replace an E-AC-3 JOC bed with a lossless WAV/FLAC bed, sub-sample phase-aligned via SubSampleSyncEngine.",
+        ["ToolPickEac3JocBtn"] = "Pick E-AC-3 JOC",
+        ["ToolPickLosslessBedBtn"] = "Pick Lossless Bed",
+        ["ToolRunOverrideBedBtn"] = "Sync & Render Override Bed",
+        ["ToolRawMlpTitle"] = "Raw Track & TrueHD Presentation",
+        ["ToolRawMlpDesc"] = "Select TrueHD MLP substream presentation (--mlp-presentation) or extract raw elementary streams (--extract).",
+        ["ToolMlpPresLabel"] = "MLP Presentation",
+        ["ToolMlpAuto"] = "Auto (Best Available)",
+        ["ToolExtractRawTrackBtn"] = "Extract Active Elementary Track (--extract)",
     };
 }

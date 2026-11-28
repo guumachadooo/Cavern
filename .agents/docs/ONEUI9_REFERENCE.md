@@ -89,8 +89,12 @@
 - **Long-Press Detail Popup (`SecQSDetail` — e.g., Wi-Fi / QS tile long-press):**
   - `color/sec_qs_detail_bg_color = #CC2E2E2E` (Dark 80% glass) / `#E6FCFCFC` (Light), `color/sec_qs_detailed_container_background = #4D000000`, `color/sesl_popup_menu_blur_background_dark = #1AFFFFFF`, `color/sesl_dialog_blur_background_color = #0D000000`, `color/qs_edit_popup_background_stroke_color = #26FFFFFF`.
   - Radii: `dimen/sec_qs_detail_background_radius = 26.00dp` (`corner = 20.00dp`), `dimen/qs_pop_over_corner_radius = 32.00dp`, `dimen/qs_layout_detail_popup_menu_bg_radius = 26.00dp`, `dimen/sesl_menu_popup_corner_radius = 26.00dp`, `dimen/qs_multisim_popup_menu_bg_blur_radius = 16.00dp`.
-- **Modular Edit / Drag-Reorder (`QsEditMode` / `SecQsEdit`):**
+- **Modular Edit / Drag-Reorder (`QsEditMode` / `SecQsEdit`) & Motion Floats (`classes2.dex` + `classes3.dex`):**
   - `dimen/qs_edit_available_area_corner_radius = 34.00dp`, `dimen/qs_edit_icon_radius = 26.00dp`, `dimen/bubble_bar_expanded_view_corner_radius_dragged = 28.00dp`, `color/qs_edit_ripple_edit_bg_color = #4DB8B8B8`.
-  - Disclosure (Rule 8): `resources.arsc` tokens & DEX class/method symbols (`QsEditMode`, `SecQSDetailController`, `QuickPanelBlur`) extracted directly; compiled Kotlin spring physics constants inside DEX bytecode require `jadx` decompilation (not installed in Termux PRoot).
+  - Direct DEX float-literal extraction (`SystemUI.apk` `classes2.dex` + `classes3.dex` on SM-S938B):
+    - `EditModeTileDefaults`: `[0.75, 10.0, 28.0, 200.0, 400.0]` (`dampingRatio=0.75f`, `liftElevation=10dp`, `cornerRadius=28dp`, `settleMs=200`, `springStiffness=400f`).
+    - `SecQSImplAnimatorBase`: `[0.9, 0.93]` (rest/recoil scale `0.93f`/`0.90f`); `KeyguardEditModeAnimatorController$actionDown$1`: `[0.975]` (press scale); `KeyguardEditModeControllerImpl`: `[0.82]` (edit-mode scale).
+    - `PanelTransitionAnimator`: `[0.5, 0.6, 50.0, 100.0, 250.0, 330.0]` (`250ms` popup/panel settle, `330ms` sheet transition); `ImmersiveScrollPopOverAnimator`: `[0.85, 150.0]`; `SecQSDetailController`: `[0.33, 0.5, 0.8, 1.3, 1.7]`.
+  - Disclosure (Rule 8): `resources.arsc` tokens & DEX class/method symbols + constant-pool float literals extracted directly; full decompiled Kotlin field names require `jadx` (not installed in Termux PRoot).
 
 

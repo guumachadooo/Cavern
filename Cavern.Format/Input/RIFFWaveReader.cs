@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 
 using Cavern.Format.Common;
 using Cavern.Format.Decoders;
@@ -34,6 +34,18 @@ namespace Cavern.Format {
 
         /// <inheritdoc/>
         public override RIFFWaveRenderer CreateRenderer(RIFFWaveDecoder decoder) => new RIFFWaveRenderer(decoder);
+
+        /// <summary>
+        /// Gets the Audio Definition Model (<c>axml</c>) metadata decoded from the RIFF WAVE header, if present.
+        /// </summary>
+        public Transcoders.AudioDefinitionModel ADM {
+            get {
+                if (Decoder == null) {
+                    ReadHeader();
+                }
+                return Decoder?.ADM;
+            }
+        }
 
         /// <summary>
         /// Gets the metadata for this codec in a human-readable format.

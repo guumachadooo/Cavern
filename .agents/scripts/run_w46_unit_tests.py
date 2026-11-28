@@ -4728,6 +4728,132 @@ RunTest("T56_W55_3_UiStateCoordinator_SpeakerXtcBypass", () => {
         "Returning to headphone route must restore ISM room ambience and auto-bypass XTC");
 });
 
+// =========================================================================
+// TEST 57 (W57.3 / Wave C3): FilterStudio Cytomic SVF Nyquist-Decramped EQ,
+// Click-Free Sweep, Universal Exporters, ADM BS.2076-2 Validation & OverrideBed
+// =========================================================================
+RunTest("T57_W57_3_FilterStudio_NyquistDecramp_Export_Adm_And_OverrideBed", () => {
+    const int sr = 48000;
+
+    // 1. Nyquist-decramped (Vicanek matched) Peak @ 18 kHz / 48 kHz: <= 0.25 dB error vs analog prototype (+6 dB)
+    CytomicSvfFilter matchedPeak = new(sr, CytomicSvfType.Peak, 18000.0, 1.4, 6.0, smoothingTimeMs: 0.0) {
+        NyquistMatched = true
+    };
+    double mag18kDb = 20.0 * Math.Log10(Math.Max(1e-12, matchedPeak.EvaluateMagnitude(18000.0)));
+    double nyqErrDb = Math.Abs(mag18kDb - 6.0);
+    Assert(nyqErrDb <= 0.25, $"Nyquist-matched 18 kHz Peak error {nyqErrDb:0.000} dB exceeds 0.25 dB (got {mag18kDb:0.000} dB)");
+    double nyqEdgeDb = 20.0 * Math.Log10(Math.Max(1e-12, matchedPeak.EvaluateMagnitude(23999.0)));
+    Assert(nyqEdgeDb > 0.2, $"Nyquist-matched 18 kHz Peak should remain decramped near Nyquist (got {nyqEdgeDb:0.000} dB)");
+
+    // 2. Click-free real-time sweep (200 Hz -> 8 kHz over 100 ms): max sample-to-sample jump stays smooth (no step pop)
+    CytomicSvfFilter sweepSvf = new(sr, CytomicSvfType.Peak, 200.0, 2.0, 8.0, smoothingTimeMs: 12.0) {
+        NyquistMatched = true
+    };
+    int totalSweep = sr / 10; // 100 ms = 4800 samples
+    float[] sine = new float[totalSweep];
+    for (int i = 0; i < totalSweep; i++) {
+        sine[i] = 0.25f * MathF.Sin((float)(2.0 * Math.PI * 1000.0 * i / sr));
+    }
+    int hop = 64;
+    for (int pos = 0; pos < totalSweep; pos += hop) {
+        double frac = (double)pos / totalSweep;
+        double hz = 200.0 * Math.Pow(40.0, frac);
+        sweepSvf.SetParameters(CytomicSvfType.Peak, hz, 2.0, 8.0, immediate: false);
+        sweepSvf.ProcessSlice(sine, pos, Math.Min(totalSweep, pos + hop), 1);
+    }
+    // Check 2nd-order finite difference (high-pass click energy) after initial 5 ms transient
+    float maxClick = 0f;
+    for (int i = 256; i < totalSweep - 2; i++) {
+        float d2 = MathF.Abs(sine[i + 1] - 2f * sine[i] + sine[i - 1]);
+        if (d2 > maxClick) maxClick = d2;
+        Assert(float.IsFinite(sine[i]), $"Non-finite sample during Cytomic SVF sweep at {i}");
+    }
+    // 1 kHz sine @ 48 kHz has intrinsic |d2| ~ 0.25 * (2*pi*1000/48000)^2 ~ 0.0043; zipper click would spike >> 0.05
+    Assert(maxClick < 0.04f, $"Live SVF sweep produced click/zipper spike: max |d2|={maxClick:0.0000}");
+
+    // 3. Universal Exporters (Equalizer APO, CamillaDSP, MiniDSP, PipeWire, FIR WAV)
+    List<FilterStudioBandSpec> bands = FilterStudioPostProcessingStage.CreateDefaultBands();
+    bands[0].GainDb = 3.5;
+    bands[2].GainDb = -2.5;
+    bands[4].FrequencyHz = 16000.0;
+    bands[4].GainDb = 4.0;
+    double preamp = EqExportFormatter.ComputeAutoPreampDb(bands, sr);
+    Assert(preamp <= 0.0 && preamp >= -18.0, $"Unexpected auto preamp: {preamp:0.00} dB");
+    string apo = EqExportFormatter.ToEqualizerApo(bands, preamp);
+    Assert(apo.Contains("Preamp:") && apo.Contains("Filter 1: ON"), "Equalizer APO export malformed");
+    string camilla = EqExportFormatter.ToCamillaDspYaml(bands, sr, preamp);
+    Assert(camilla.Contains("filters:") && camilla.Contains("Biquad") && camilla.Contains("pipeline:"), "CamillaDSP YAML malformed");
+    string minidsp = EqExportFormatter.ToMiniDspBiquads(bands, sr);
+    Assert(minidsp.Contains("biquad1,") && minidsp.Contains("b0="), "MiniDSP biquad export malformed");
+    string pw = EqExportFormatter.ToPipeWireFilterChain(bands, preamp);
+    Assert(pw.Contains("filter.graph") && pw.Contains("bq_peaking"), "PipeWire filter-chain export malformed");
+    float[] fir = EqExportFormatter.RenderFirImpulse(bands, sr, 512, preamp);
+    Assert(fir.Length == 512 && fir.All(float.IsFinite), "FIR impulse render failed");
+    Assert(fir.Max(MathF.Abs) > 0.1f, "FIR impulse is silent");
+
+    // 4. FilterStudioPostProcessingStage JSON roundtrip + live spectrum bins + process
+    FilterStudioPostProcessingStage fsStage = new() { UserEnabled = true, NyquistMatched = true };
+    fsStage.SetBands(bands);
+    string json = fsStage.SerializeBandsJson();
+    FilterStudioPostProcessingStage fsStage2 = new();
+    fsStage2.LoadBandsJson(json);
+    Assert(fsStage2.GetBandsSnapshot().Count == bands.Count, "FilterStudio JSON roundtrip band count mismatch");
+    fsStage.Configure(sr, 2);
+    float[] stereo = new float[2048];
+    for (int blk = 0; blk < 3; blk++) {
+        for (int i = 0; i < 1024; i++) {
+            int sampleIdx = blk * 1024 + i;
+            float v = 0.35f * MathF.Sin((float)(2.0 * Math.PI * 1000.0 * sampleIdx / sr));
+            stereo[i * 2] = v;
+            stereo[i * 2 + 1] = v;
+        }
+        fsStage.ProcessInterleaved(stereo, 0, 1024, 2, null!);
+    }
+    float[] spec = new float[FilterStudioPostProcessingStage.SpectrumBinCount];
+    fsStage.CopySpectrumDb(spec);
+    Assert(spec.Max() > -25f, $"FilterStudio Goertzel spectrum failed to detect 1 kHz tone (max={spec.Max():0.0} dB)");
+
+    // 5. ADM BS.2076-2 Validation (valid vs invalid IDs / broken refs)
+    var dur1s = new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMTimeSpan(1.0);
+    var validAdm = new Cavern.Format.Transcoders.AudioDefinitionModel(
+        [new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMProgramme("APR_1001", "Main", dur1s) { Contents = ["ACO_1001"] }],
+        [new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMContent("ACO_1001", "Content") { Objects = ["AO_1001"] }],
+        [new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMObject("AO_1001", "Obj", Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMTimeSpan.Zero, dur1s, "AP_00010001") { Tracks = ["ATU_00000001"] }],
+        [new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMPackFormat("AP_00010001", "Pack", Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMPackType.DirectSpeakers) { ChannelFormats = ["AC_00010001"] }],
+        [new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMChannelFormat("AC_00010001", "L", Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMPackType.DirectSpeakers) {
+            Blocks = [new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMBlockFormat {
+                Offset = Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMTimeSpan.Zero,
+                Duration = dur1s,
+                Interpolation = dur1s,
+                Position = new System.Numerics.Vector3(-0.5f, 0f, 1f)
+            }]
+        }],
+        [new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMTrack("ATU_00000001", Cavern.Format.BitDepth.Int24, sr, "AT_00010001_01", "AP_00010001")],
+        [new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMTrackFormat("AT_00010001_01", "PCM_L", Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMTrackCodec.PCM, "AS_00010001")],
+        [new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMStreamFormat("AS_00010001", "Stream_L", Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMTrackCodec.PCM, "AC_00010001", "AP_00010001", "AT_00010001_01")]);
+    var okRep = validAdm.ValidateBs2076_2();
+    Assert(okRep.IsBs2076Compliant, $"Expected valid ADM BS.2076-2 compliance, got errors: {string.Join("; ", okRep.Errors)}");
+
+    var badAdm = new Cavern.Format.Transcoders.AudioDefinitionModel(
+        [new Cavern.Format.Transcoders.AudioDefinitionModelElements.ADMProgramme("BAD_01", "Bad", dur1s) { Contents = ["ACO_MISSING"] }],
+        [], [], [], [], [], [], []);
+    var badRep = badAdm.ValidateBs2076_2();
+    Assert(!badRep.IsBs2076Compliant && badRep.Errors.Count >= 2 && badRep.Warnings.Count >= 1,
+        $"Expected ADM BS.2076-2 validator to reject bad prefix & dangling ref (err={badRep.Errors.Count}, warn={badRep.Warnings.Count})");
+
+    // 6. OverrideBedDecoder.AlignOverrideBed sub-sample sync check
+    int nSync = sr * 2;
+    float[] refSig = new float[nSync];
+    float[] shiftedSig = new float[nSync];
+    Random rng = new(42);
+    for (int i = 0; i < nSync; i++) refSig[i] = (float)(rng.NextDouble() * 2.0 - 1.0) * 0.4f;
+    const int trueShift = 17;
+    for (int i = trueShift; i < nSync; i++) shiftedSig[i] = refSig[i - trueShift];
+    var syncRes = Cavernize.Logic.CommandLine.HiddenCommands.OverrideBedDecoder.AlignOverrideBed(refSig, shiftedSig, sr);
+    Assert(syncRes.IsSynced && Math.Abs(Math.Abs(syncRes.BaseOffsetSamples) - trueShift) < 0.75,
+        $"OverrideBed SubSampleSync expected ~{trueShift} smp, got {syncRes.BaseOffsetSamples:0.00} (synced={syncRes.IsSynced})");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -6114,8 +6240,8 @@ def _py_stage13_w53_4_to_w53_6_wave_d_e_f_contracts() -> None:
         assert tok in mod_model, f"W53.4 Wave D missing '{tok}' in ModularQuickPanelLayout.cs"
 
     mod_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.ModularBlocks.cs").read_text(encoding="utf-8")
-    for tok in ("ShowModularLayoutEditorDialog", "ReorderLinearLayoutInPlace", "OneUiTheme.OnPrimary", "BaselineAligned = false"):
-        assert tok in mod_ui, f"W53.4 Wave D missing '{tok}' in MainActivity.ModularBlocks.cs"
+    for tok in ("EnterModularInlineEditMode", "ReorderLinearLayoutInPlace", "ModularBlockDragTouchListener", "BaselineAligned = false"):
+        assert tok in mod_ui, f"W53.4/W55.5 Wave D missing '{tok}' in MainActivity.ModularBlocks.cs"
 
     # Wave E (B12): W8A16 ONNX quantizer + SoC-keyed QNN context cache + Settings wiring
     quant_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "OnnxMobileQuantizer.cs").read_text(encoding="utf-8")
@@ -6319,6 +6445,51 @@ def _py_stage17_w55_3_and_w57_2_contracts() -> None:
         assert tok in ffmpeg_cs, f"W57.2 FFmpeg.cs missing {tok}"
 
 
+def _py_stage18_w55_5_and_w57_3_contracts() -> None:
+    """W55.5 + W57.3: One UI 9 SecQSDetail blurred-glass popups (H1-safe), swipe Mini-Player, in-place QsEditMode drag, FilterStudio & Export Tools."""
+    theme_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Theme" / "OneUiTheme.cs").read_text(encoding="utf-8")
+    for tok in ("SecQsDetailBg", "SecQsDetailStroke", "GlassCardSurface", "GlassCardBorder", "CardCornerDp = 28f", "QsEditRestScale"):
+        assert tok in theme_cs, f"W55.5 OneUiTheme.cs missing {tok}"
+
+    comp_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Views" / "OneUiComponents.cs").read_text(encoding="utf-8")
+    assert "CreateSecQsDetailDrawable" in comp_cs, "W55.5 OneUiModalDialog must use CreateSecQsDetailDrawable"
+    assert "SetBackgroundBlurRadius" in comp_cs and "WindowManagerFlags.BlurBehind" in comp_cs, "W55.5 OneUiModalDialog must use API 31+ cross-window blur-behind"
+    assert "bgRoot.SetRenderEffect" not in comp_cs, "W55.5 H1 violation: OneUiModalDialog must NOT apply full-screen DecorView RenderEffect blur"
+
+    np_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NowPlayingSheet.cs").read_text(encoding="utf-8")
+    for tok in ("UpdateTopShellHeaderScroll", "MiniPlayerSwipeUpTouchListener", "NowPlayingSheetDismissTouchListener"):
+        assert tok in np_cs, f"W55.5 MainActivity.NowPlayingSheet.cs missing {tok}"
+
+    mod_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.ModularBlocks.cs").read_text(encoding="utf-8")
+    for tok in ("EnterModularInlineEditMode", "ExitModularInlineEditMode", "ModularBlockDragTouchListener", "SwapModularBlockByDrag"):
+        assert tok in mod_cs, f"W55.5 MainActivity.ModularBlocks.cs missing {tok}"
+    assert "ShowModularLayoutEditorDialog" not in mod_cs, "W55.5 legacy ↑/↓ ShowModularLayoutEditorDialog must be removed"
+
+    ptab_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerTab.cs").read_text(encoding="utf-8")
+    assert "roomEditLayoutBtn" not in ptab_cs, "W55.5 legacy roomEditLayoutBtn must be removed"
+
+    room_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Views" / "RoomSimulatorView.cs").read_text(encoding="utf-8")
+    assert "orbitGestureClaimed" in room_cs, "W55.5 RoomSimulatorView must disambiguate vertical scroll vs 3D orbit drag"
+
+    svf_cs = (REPO_ROOT / "Cavern" / "Filters" / "CytomicSvfFilter.cs").read_text(encoding="utf-8")
+    for tok in ("NyquistMatched", "ProcessSlice", "EvaluateComplex", "EvaluatePhaseRad", "GetBiquadCoefficients"):
+        assert tok in svf_cs, f"W57.3 CytomicSvfFilter.cs missing {tok}"
+
+    eq_exp_cs = (REPO_ROOT / "Cavern" / "Filters" / "EqExportFormatter.cs").read_text(encoding="utf-8")
+    for tok in ("ToEqualizerApo", "ToCamillaDspYaml", "ToMiniDspBiquads", "ToPipeWireFilterChain", "RenderFirImpulse"):
+        assert tok in eq_exp_cs, f"W57.3 EqExportFormatter.cs missing {tok}"
+
+    adm_val_cs = (REPO_ROOT / "Cavern.Format" / "Transcoders" / "AudioDefinitionModel.Validation.cs").read_text(encoding="utf-8")
+    assert "ValidateBs2076_2" in adm_val_cs and "AdmValidationReport" in adm_val_cs, "W57.3 ADM BS.2076-2 validator missing"
+
+    fs_ui_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.FilterStudio.cs").read_text(encoding="utf-8")
+    for tok in ("ShowFilterStudioDialog", "ShowFilterStudioExportDialog", "BuildExportToolsSection", "RunAdmValidationOnFile", "RunEnhancedAc3MergeTool", "RunWavChannelReorderTool", "RunOverrideBedSyncTool", "RunRawTrackExtractTool"):
+        assert tok in fs_ui_cs, f"W57.3 MainActivity.FilterStudio.cs missing {tok}"
+
+    exp_tab_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.ExportTab.cs").read_text(encoding="utf-8")
+    assert "ExportSubModeTools" in exp_tab_cs and "BuildExportToolsSection" in exp_tab_cs, "W57.3 Export -> Tools sub-mode not wired"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -6339,6 +6510,7 @@ PYTHON_CHECKS = [
     ("PY_T15_W56_4_CoEvolve_BridgeCmd_Packaging_SettingsSchema_DspParity", _py_stage15_w56_4_co_evolve_zero_static_contracts),
     ("PY_T16_W55_2_CollapseWhenDisabled_And_W57_1_JocInlineContracts", _py_stage16_w55_2_collapse_when_disabled_and_w57_1_contracts),
     ("PY_T17_W55_3_And_W57_2_Dedup_Coordinator_ListenerCtx_VbrEac3_Ffmpeg", _py_stage17_w55_3_and_w57_2_contracts),
+    ("PY_T18_W55_5_And_W57_3_OneUi9GlassPopups_Gestures_FilterStudio_Tools", _py_stage18_w55_5_and_w57_3_contracts),
 ]
 
 

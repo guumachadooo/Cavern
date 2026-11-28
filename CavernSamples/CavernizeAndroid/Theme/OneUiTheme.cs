@@ -75,11 +75,11 @@ public static partial class OneUiTheme {
         return Typeface.Create(Typeface.Default, fallbackStyle);
     }
 
-    // Dynamic Atmospheric Dark + Frosted Glass Palette (refreshed in Initialize)
+    // Dynamic Atmospheric Dark + Frosted Glass Palette (verified from SystemUI.apk resources.arsc)
     public static Color BgScreen { get; private set; } = Color.ParseColor("#080A10");
-    public static Color SurfaceCard { get; private set; } = Color.ParseColor("#B816171F");
+    public static Color SurfaceCard { get; private set; } = Color.ParseColor("#3D000000");
     public static Color SurfaceElevated { get; private set; } = Color.ParseColor("#CE20212B");
-    public static Color SurfaceModal { get; private set; } = Color.ParseColor("#EC1D1E27");
+    public static Color SurfaceModal { get; private set; } = Color.ParseColor("#CC2E2E2E");
     public static Color SurfaceModalRow { get; private set; } = Color.ParseColor("#E02A2C38");
     public static Color SurfaceFloating { get; private set; } = Color.ParseColor("#36FFFFFF");
     public static Color SurfaceSubTile { get; private set; } = Color.ParseColor("#24FFFFFF");
@@ -87,10 +87,20 @@ public static partial class OneUiTheme {
     public static Color ControlStroke { get; private set; } = Color.ParseColor("#5A5B66");
     public static Color BorderSubtle { get; private set; } = Color.ParseColor("#22FFFFFF");
 
+    // Verified SystemUI.apk SecQSDetail Popup & 120 Hz Glass Module Tokens
+    public static readonly Color SecQsDetailBg = Color.ParseColor("#CC2E2E2E");
+    public static readonly Color SecQsDetailBgFallback = Color.ParseColor("#EB24252E");
+    public static readonly Color SecQsDetailStroke = Color.ParseColor("#26FFFFFF");
+    public static readonly Color GlassCardSurface = Color.ParseColor("#3D000000");
+    public static readonly Color GlassCardBorder = Color.ParseColor("#0DFFFFFF");
+    public static readonly Color GlassCardBorderTop = Color.ParseColor("#24FFFFFF");
+    public static readonly Color QsEditBorderStroke = Color.ParseColor("#38FFFFFF");
+    public static readonly Color QsEditRippleBg = Color.ParseColor("#4DB8B8B8");
+
     // Specular Glass Borders
-    public static Color GlassRimTop { get; private set; } = Color.ParseColor("#48FFFFFF");
-    public static Color GlassRimMid { get; private set; } = Color.ParseColor("#14FFFFFF");
-    public static Color GlassRimBottom { get; private set; } = Color.ParseColor("#2BFFFFFF");
+    public static Color GlassRimTop { get; private set; } = Color.ParseColor("#24FFFFFF");
+    public static Color GlassRimMid { get; private set; } = Color.ParseColor("#0DFFFFFF");
+    public static Color GlassRimBottom { get; private set; } = Color.ParseColor("#1AFFFFFF");
     public static Color FloatingBorder { get; private set; } = Color.ParseColor("#26FFFFFF");
 
     // Dynamic Brand & Wallpaper Accent Tokens (resolved verbatim from framework-res wallpapertheme_template.json on API 31+)
@@ -150,11 +160,23 @@ public static partial class OneUiTheme {
     public static string ActiveDesignTokensSource { get; private set; } = "local";
     public const int DesignKitSchemaVersion = 1;
 
-    // SESL9 Dimensions (dp)
-    public const float CardCornerDp = 26f;
+    // SESL9 / SystemUI.apk Verified Dimensions & QsEditMode Motion Constants
+    public const float CardCornerDp = 28f;
+    public const float SecQsDetailCornerDp = 26f;
+    public const float SecQsDetailBlurRadiusDp = 25f;
+    public const int SecQsDetailOpenMs = 250;
     public const float ButtonCornerDp = 18f;
     public const float TileCornerDp = 22f;
     public const float PillCornerDp = 999f;
+
+    // Directly extracted from SystemUI.apk EditModeTileDefaults / SecQSImplAnimatorBase DEX pools
+    public const float QsEditSpringStiffness = 400f;
+    public const float QsEditSpringDamping = 0.75f;
+    public const float QsEditLiftElevationDp = 10f;
+    public const float QsEditCornerDp = 28f;
+    public const int QsEditSettleMs = 200;
+    public const float QsEditRestScale = 0.93f;
+    public const float QsEditLiftScale = 1.035f;
 
     public static float EffectiveCardCornerDp { get; private set; } = CardCornerDp;
     public static float EffectiveButtonCornerDp { get; private set; } = ButtonCornerDp;
@@ -198,9 +220,9 @@ public static partial class OneUiTheme {
         PeachText = defaultHeaderTint;
         BedChannel = defaultBlueHigh;
         BgScreen = defaultBaseBg;
-        SurfaceCard = defaultCard;
+        SurfaceCard = GlassCardSurface;
         SurfaceElevated = defaultElevated;
-        SurfaceModal = Color.Argb(236, 28, 29, 38);
+        SurfaceModal = SecQsDetailBg;
         SurfaceModalRow = Color.Argb(224, 40, 42, 54);
         RoomBg = defaultRoomBg;
         SurfaceFloatingBar = Color.Argb(230, 58, 58, 61);
@@ -276,10 +298,10 @@ public static partial class OneUiTheme {
                 IconStemsCalib = HarmonizeIconVariant(exactQuickPanelSlider, -56f);
                 IconSystemInfo = sysA2_400 ?? Blend(exactQuickPanelSlider, Color.Rgb(185, 192, 208), 0.35f);
 
-                // Subtle 3% accent whisper on elevated frosted cards; ambient cover art flows cleanly behind
-                SurfaceCard = WithAlpha(Blend(Color.Rgb(21, 22, 28), Primary, 0.03f), 188);
+                // Verified SystemUI.apk 120 Hz dark glass modules (#3D000000 + subtle 3% wallpaper whisper)
+                SurfaceCard = WithAlpha(Blend(Color.Rgb(8, 9, 14), Primary, 0.03f), 0x52);
                 SurfaceElevated = WithAlpha(Blend(Color.Rgb(30, 31, 39), exactQuickPanelSlider, 0.04f), 210);
-                SurfaceModal = WithAlpha(Blend(Color.Rgb(26, 27, 36), exactQuickPanelSlider, 0.04f), 236);
+                SurfaceModal = SecQsDetailBg;
                 SurfaceModalRow = WithAlpha(Blend(Color.Rgb(38, 40, 52), exactQuickPanelSlider, 0.04f), 226);
                 OnPrimary = GetContrastingTextColor(Primary);
             }

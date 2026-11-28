@@ -1,0 +1,345 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
+
+namespace Cavern.Filters {
+    /// <summary>
+    /// Serializable parametric band specification used by FilterStudio and <see cref="EqExportFormatter"/>.
+    /// </summary>
+    public sealed class FilterStudioBandSpec {
+        /// <summary>
+        /// Filter topology (Peak, LowShelf, HighShelf, Lowpass, Highpass, Bandpass, Notch, Allpass).
+        /// </summary>
+        public CytomicSvfType Type { get; set; } = CytomicSvfType.Peak;
+
+        /// <summary>
+        /// Center or cutoff frequency in Hz.
+        /// </summary>
+        public double FrequencyHz { get; set; } = 1000.0;
+
+        /// <summary>
+        /// Gain in dB (applicable to Peak, LowShelf, HighShelf).
+        /// </summary>
+        public double GainDb { get; set; }
+
+        /// <summary>
+        /// Quality factor Q.
+        /// </summary>
+        public double Q { get; set; } = 0.7071067811865476;
+
+        /// <summary>
+        /// Whether this band is active in processing and export.
+        /// </summary>
+        public bool Enabled { get; set; } = true;
+
+        /// <summary>
+        /// Whether Vicanek/Orfanidis Nyquist-decramped matching is enabled for this band.
+        /// </summary>
+        public bool NyquistMatched { get; set; } = true;
+
+        /// <summary>
+        /// Parameterless constructor for serializers.
+        /// </summary>
+        public FilterStudioBandSpec() { }
+
+        /// <summary>
+        /// Create a band specification with explicit parameters.
+        /// </summary>
+        public FilterStudioBandSpec(
+            CytomicSvfType type,
+            double frequencyHz,
+            double gainDb = 0.0,
+            double q = 0.7071067811865476,
+            bool enabled = true,
+            bool nyquistMatched = true) {
+            Type = type;
+            FrequencyHz = frequencyHz;
+            GainDb = gainDb;
+            Q = q;
+            Enabled = enabled;
+            NyquistMatched = nyquistMatched;
+        }
+
+        /// <summary>
+        /// Deep-clone this band specification.
+        /// </summary>
+        public FilterStudioBandSpec Clone() =>
+            new FilterStudioBandSpec(Type, FrequencyHz, GainDb, Q, Enabled, NyquistMatched);
+    }
+
+    /// <summary>
+    /// Supported universal EQ / FIR export formats for FilterStudio.
+    /// </summary>
+    public enum EqExportFormat {
+        /// <summary>Equalizer APO ParametricEQ text format (.txt).</summary>
+        EqualizerApo,
+        /// <summary>CamillaDSP YAML biquad filter pipeline (.yml).</summary>
+        CamillaDsp,
+        /// <summary>MiniDSP normalized biquad coefficient table (.txt).</summary>
+        MiniDsp,
+        /// <summary>PipeWire filter-chain SPA biquad configuration (.conf).</summary>
+        PipeWire,
+        /// <summary>Linear-time-invariant FIR impulse response samples (rendered to WAV).</summary>
+        FirWav
+    }
+
+    /// <summary>
+    /// Universal EQ and FIR export formatter converting <see cref="FilterStudioBandSpec"/> cascades into
+    /// Equalizer APO, CamillaDSP YAML, MiniDSP biquads, PipeWire filter-chain configs, and FIR WAV impulse arrays.
+    /// </summary>
+    public static class EqExportFormatter {
+        static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+        /// <summary>
+        /// Compute safe peak-headroom preamp in dB so composite magnitude across 20 Hz..20 kHz stays &lt;= 0 dBFS.
+        /// </summary>
+        public static double ComputeAutoPreampDb(IReadOnlyList<FilterStudioBandSpec> bands, int sampleRate) {
+            if (bands == null || bands.Count == 0) {
+                return 0.0;
+            }
+            int sr = sampleRate > 0 ? sampleRate : Listener.DefaultSampleRate;
+            List<CytomicSvfFilter> active = BuildActiveFilters(bands, sr);
+            if (active.Count == 0) {
+                return 0.0;
+            }
+            double maxDb = 0.0;
+            const int steps = 256;
+            double maxFreq = Math.Min(20000.0, sr * 0.49);
+            double ratio = maxFreq / 20.0;
+            for (int i = 0; i < steps; i++) {
+                double f = 20.0 * Math.Pow(ratio, i / (double)(steps - 1));
+                double sumDb = 0.0;
+                for (int b = 0; b < active.Count; b++) {
+                    double mag = active[b].EvaluateMagnitude(f);
+                    sumDb += 20.0 * Math.Log10(Math.Max(mag, 1e-9));
+                }
+                if (sumDb > maxDb) {
+                    maxDb = sumDb;
+                }
+            }
+            return maxDb > 0.05 ? -(maxDb + 0.1) : 0.0;
+        }
+
+        /// <summary>
+        /// Export bands to Equalizer APO ParametricEQ syntax.
+        /// </summary>
+        public static string ToEqualizerApo(IReadOnlyList<FilterStudioBandSpec> bands, double preampDb = 0.0) {
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("# Generated by Cavern FilterStudio (Equalizer APO)");
+            sb.Append("Preamp: ").Append(preampDb.ToString("0.00", Inv)).AppendLine(" dB");
+            if (bands == null) {
+                return sb.ToString();
+            }
+            int idx = 1;
+            for (int i = 0; i < bands.Count; i++) {
+                FilterStudioBandSpec b = bands[i];
+                if (b == null) {
+                    continue;
+                }
+                string state = b.Enabled ? "ON" : "OFF";
+                string code = ToApoCode(b.Type);
+                sb.Append("Filter ").Append(idx++).Append(": ").Append(state)
+                    .Append(' ').Append(code)
+                    .Append(" Fc ").Append(Math.Clamp(b.FrequencyHz, 10.0, 24000.0).ToString("0.##", Inv)).Append(" Hz");
+                if (UsesGain(b.Type)) {
+                    sb.Append(" Gain ").Append(Math.Clamp(b.GainDb, -36.0, 36.0).ToString("0.00", Inv)).Append(" dB");
+                }
+                sb.Append(" Q ").Append(Math.Clamp(b.Q, 0.05, 30.0).ToString("0.###", Inv)).AppendLine();
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Export bands to CamillaDSP YAML configuration using exact normalized biquads (including Nyquist decramping).
+        /// </summary>
+        public static string ToCamillaDspYaml(IReadOnlyList<FilterStudioBandSpec> bands, int sampleRate, double preampDb = 0.0) {
+            int sr = sampleRate > 0 ? sampleRate : Listener.DefaultSampleRate;
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("# Generated by Cavern FilterStudio (CamillaDSP)");
+            sb.AppendLine("filters:");
+            sb.AppendLine("  preamp:");
+            sb.AppendLine("    type: Gain");
+            sb.AppendLine("    parameters:");
+            sb.Append("      gain: ").AppendLine(preampDb.ToString("0.00", Inv));
+            sb.AppendLine("      inverted: false");
+
+            List<string> pipelineNames = new List<string> { "preamp" };
+            if (bands != null) {
+                int idx = 1;
+                for (int i = 0; i < bands.Count; i++) {
+                    FilterStudioBandSpec b = bands[i];
+                    if (b == null || !b.Enabled) {
+                        continue;
+                    }
+                    CytomicSvfFilter f = CreateFilter(b, sr);
+                    f.GetBiquadCoefficients(out double b0, out double b1, out double b2, out double a1, out double a2);
+                    string name = "band_" + idx++;
+                    pipelineNames.Add(name);
+                    sb.Append("  ").Append(name).AppendLine(":");
+                    sb.AppendLine("    type: Biquad");
+                    sb.AppendLine("    parameters:");
+                    sb.AppendLine("      type: Free");
+                    sb.Append("      a1: ").AppendLine(a1.ToString("G15", Inv));
+                    sb.Append("      a2: ").AppendLine(a2.ToString("G15", Inv));
+                    sb.Append("      b0: ").AppendLine(b0.ToString("G15", Inv));
+                    sb.Append("      b1: ").AppendLine(b1.ToString("G15", Inv));
+                    sb.Append("      b2: ").AppendLine(b2.ToString("G15", Inv));
+                }
+            }
+
+            sb.AppendLine("pipeline:");
+            sb.AppendLine("  - type: Filter");
+            sb.AppendLine("    channels: [0, 1]");
+            sb.AppendLine("    names:");
+            for (int i = 0; i < pipelineNames.Count; i++) {
+                sb.Append("      - ").AppendLine(pipelineNames[i]);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Export bands to MiniDSP Advanced Biquad table (b0, b1, b2, -a1, -a2 convention).
+        /// </summary>
+        public static string ToMiniDspBiquads(IReadOnlyList<FilterStudioBandSpec> bands, int sampleRate) {
+            int sr = sampleRate > 0 ? sampleRate : Listener.DefaultSampleRate;
+            StringBuilder sb = new StringBuilder();
+            sb.Append("# Generated by Cavern FilterStudio (MiniDSP Biquads @ ").Append(sr).AppendLine(" Hz)");
+            if (bands == null) {
+                return sb.ToString();
+            }
+            int idx = 1;
+            for (int i = 0; i < bands.Count; i++) {
+                FilterStudioBandSpec b = bands[i];
+                if (b == null || !b.Enabled) {
+                    continue;
+                }
+                CytomicSvfFilter f = CreateFilter(b, sr);
+                f.GetBiquadCoefficients(out double b0, out double b1, out double b2, out double a1, out double a2);
+                sb.Append("biquad").Append(idx++).AppendLine(",");
+                sb.Append("b0=").Append(b0.ToString("G15", Inv)).AppendLine(",");
+                sb.Append("b1=").Append(b1.ToString("G15", Inv)).AppendLine(",");
+                sb.Append("b2=").Append(b2.ToString("G15", Inv)).AppendLine(",");
+                // MiniDSP negates feedback coefficients a1, a2 relative to standard transfer function denominator
+                sb.Append("a1=").Append((-a1).ToString("G15", Inv)).AppendLine(",");
+                sb.Append("a2=").Append((-a2).ToString("G15", Inv)).AppendLine();
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Export bands to PipeWire <c>libpipewire-module-filter-chain</c> configuration snippet.
+        /// </summary>
+        public static string ToPipeWireFilterChain(IReadOnlyList<FilterStudioBandSpec> bands, double preampDb = 0.0) {
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("# Generated by Cavern FilterStudio (PipeWire filter-chain)");
+            sb.AppendLine("context.modules = [");
+            sb.AppendLine("  { name = libpipewire-module-filter-chain");
+            sb.AppendLine("    args = {");
+            sb.AppendLine("      node.description = \"Cavern FilterStudio EQ\"");
+            sb.AppendLine("      filter.graph = {");
+            sb.AppendLine("        nodes = [");
+            sb.AppendLine("          { type = builtin name = eq_preamp label = bq_highshelf control = { \"Freq\" = 0.0 \"Q\" = 1.0 \"Gain\" = " +
+                preampDb.ToString("0.00", Inv) + " } }");
+
+            List<string> nodeNames = new List<string> { "eq_preamp" };
+            if (bands != null) {
+                int idx = 1;
+                for (int i = 0; i < bands.Count; i++) {
+                    FilterStudioBandSpec b = bands[i];
+                    if (b == null || !b.Enabled) {
+                        continue;
+                    }
+                    string name = "eq_band_" + idx++;
+                    nodeNames.Add(name);
+                    sb.Append("          { type = builtin name = ").Append(name)
+                        .Append(" label = ").Append(ToPipeWireLabel(b.Type))
+                        .Append(" control = { \"Freq\" = ").Append(Math.Clamp(b.FrequencyHz, 10.0, 24000.0).ToString("0.##", Inv))
+                        .Append(" \"Q\" = ").Append(Math.Clamp(b.Q, 0.05, 30.0).ToString("0.###", Inv))
+                        .Append(" \"Gain\" = ").Append((UsesGain(b.Type) ? Math.Clamp(b.GainDb, -36.0, 36.0) : 0.0).ToString("0.00", Inv))
+                        .AppendLine(" } }");
+                }
+            }
+            sb.AppendLine("        ]");
+            sb.AppendLine("        links = [");
+            for (int i = 0; i < nodeNames.Count - 1; i++) {
+                sb.Append("          { output = \"").Append(nodeNames[i])
+                    .Append(":Out\" input = \"").Append(nodeNames[i + 1]).AppendLine(":In\" }");
+            }
+            sb.AppendLine("        ]");
+            sb.AppendLine("      }");
+            sb.AppendLine("    }");
+            sb.AppendLine("  }");
+            sb.AppendLine("]");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Render the exact minimum-phase FIR impulse response of the active band cascade (for WAV export / convolution).
+        /// </summary>
+        public static float[] RenderFirImpulse(
+            IReadOnlyList<FilterStudioBandSpec> bands,
+            int sampleRate,
+            int tapCount = 4096,
+            double preampDb = 0.0) {
+            int sr = sampleRate > 0 ? sampleRate : Listener.DefaultSampleRate;
+            int n = Math.Clamp(tapCount, 64, 65536);
+            float[] impulse = new float[n];
+            impulse[0] = (float)Math.Pow(10.0, preampDb / 20.0);
+            List<CytomicSvfFilter> active = BuildActiveFilters(bands, sr);
+            for (int i = 0; i < active.Count; i++) {
+                active[i].Process(impulse);
+            }
+            return impulse;
+        }
+
+        static List<CytomicSvfFilter> BuildActiveFilters(IReadOnlyList<FilterStudioBandSpec> bands, int sampleRate) {
+            List<CytomicSvfFilter> list = new List<CytomicSvfFilter>();
+            if (bands == null) {
+                return list;
+            }
+            for (int i = 0; i < bands.Count; i++) {
+                FilterStudioBandSpec b = bands[i];
+                if (b != null && b.Enabled) {
+                    list.Add(CreateFilter(b, sampleRate));
+                }
+            }
+            return list;
+        }
+
+        static CytomicSvfFilter CreateFilter(FilterStudioBandSpec b, int sampleRate) {
+            CytomicSvfFilter f = new CytomicSvfFilter(sampleRate, b.Type, b.FrequencyHz, b.Q, b.GainDb, 0.0);
+            f.NyquistMatched = b.NyquistMatched;
+            return f;
+        }
+
+        static bool UsesGain(CytomicSvfType type) =>
+            type == CytomicSvfType.Peak || type == CytomicSvfType.LowShelf || type == CytomicSvfType.HighShelf;
+
+        static string ToApoCode(CytomicSvfType type) {
+            switch (type) {
+                case CytomicSvfType.Lowpass: return "LPQ";
+                case CytomicSvfType.Highpass: return "HPQ";
+                case CytomicSvfType.Bandpass: return "BP";
+                case CytomicSvfType.Notch: return "NO";
+                case CytomicSvfType.LowShelf: return "LSC";
+                case CytomicSvfType.HighShelf: return "HSC";
+                case CytomicSvfType.Allpass: return "AP";
+                default: return "PK";
+            }
+        }
+
+        static string ToPipeWireLabel(CytomicSvfType type) {
+            switch (type) {
+                case CytomicSvfType.Lowpass: return "bq_lowpass";
+                case CytomicSvfType.Highpass: return "bq_highpass";
+                case CytomicSvfType.Bandpass: return "bq_bandpass";
+                case CytomicSvfType.Notch: return "bq_notch";
+                case CytomicSvfType.LowShelf: return "bq_lowshelf";
+                case CytomicSvfType.HighShelf: return "bq_highshelf";
+                case CytomicSvfType.Allpass: return "bq_allpass";
+                default: return "bq_peaking";
+            }
+        }
+    }
+}

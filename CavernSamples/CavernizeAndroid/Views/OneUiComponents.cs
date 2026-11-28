@@ -204,9 +204,9 @@ public sealed class OneUiInlineSelector : LinearLayout {
 }
 
 /// <summary>
-/// Full One UI 9 frosted-glass modal dialog replacing all unstyled Android AlertDialogs.
-/// Softly blurs the live background window on API 31+ and uses smoked frosted surface opacity
-/// so foreground controls stay crisp and never visually clash with content behind the dialog.
+/// Authentic Samsung One UI 9 SecQSDetail blurred-glass modal dialog replacing all unstyled Android AlertDialogs.
+/// Uses API 31+ <c>Window.SetBackgroundBlurRadius</c> + <c>WindowManagerFlags.BlurBehind</c> with graceful
+/// opaque-glass fallback (zero full-screen <c>RenderEffect</c> blur on Activity DecorView, honoring H1).
 /// </summary>
 public static class OneUiModalDialog {
     sealed class HelpActionState {
@@ -214,7 +214,6 @@ public static class OneUiModalDialog {
         public Action Handler;
     }
 
-    static readonly HashSet<Dialog> activeBlurredDialogs = [];
     static readonly List<WeakReference<Dialog>> activeDialogs = [];
     static readonly object activeDialogsLock = new();
     static readonly ConditionalWeakTable<Dialog, HelpActionState> helpStates = new();
@@ -300,8 +299,18 @@ public static class OneUiModalDialog {
 
         int dp(float v) => OneUiTheme.Dp(ctx, v);
 
+        bool crossWindowBlur = false;
+        if (OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            try {
+                IWindowManager wm = (ctx as Activity)?.WindowManager;
+                crossWindowBlur = wm != null && wm.IsCrossWindowBlurEnabled;
+            } catch {
+                crossWindowBlur = false;
+            }
+        }
+
         LinearLayout card = new(ctx) { Orientation = Orientation.Vertical };
-        card.Background = OneUiTheme.CreateGlassCardDrawable(ctx, OneUiTheme.SurfaceModal, 28f);
+        card.Background = OneUiTheme.CreateSecQsDetailDrawable(ctx, crossWindowBlur);
         card.Elevation = dp(20);
         card.SetPadding(dp(20), dp(18), dp(20), dp(16));
 
@@ -423,44 +432,24 @@ public static class OneUiModalDialog {
         dialog.SetContentView(frame);
         if (dialog.Window != null) {
             dialog.Window.SetBackgroundDrawable(new ColorDrawable(Color.Transparent));
-            dialog.Window.SetDimAmount(0.68f);
+            dialog.Window.SetDimAmount(crossWindowBlur ? 0.52f : 0.68f);
             dialog.Window.SetLayout(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
             dialog.Window.SetGravity(GravityFlags.Center);
-        }
 
-        View bgRoot = (ctx as Activity)?.Window?.DecorView;
-        if (bgRoot != null && OperatingSystem.IsAndroidVersionAtLeast(31)) {
-            activeBlurredDialogs.RemoveWhere(d => d == null || !d.IsShowing);
-            bool wasEmpty = activeBlurredDialogs.Count == 0;
-            activeBlurredDialogs.Add(dialog);
-            if (wasEmpty) {
+            if (crossWindowBlur && OperatingSystem.IsAndroidVersionAtLeast(31)) {
                 try {
-                    bgRoot.SetRenderEffect(RenderEffect.CreateBlurEffect(28f, 28f, Shader.TileMode.Clamp));
-                } catch {
-                    // Ignore on unsupported window surfaces
-                }
-            }
-
-            bool released = false;
-            void ReleaseDialogBlur() {
-                if (released) {
-                    return;
-                }
-                released = true;
-                activeBlurredDialogs.Remove(dialog);
-                activeBlurredDialogs.RemoveWhere(d => d == null || !d.IsShowing);
-                if (activeBlurredDialogs.Count == 0 && OperatingSystem.IsAndroidVersionAtLeast(31)) {
-                    try {
-                        bgRoot.SetRenderEffect(null);
-                    } catch {
-                        // Ignore teardown race
+                    int blurRadiusPx = Math.Clamp(dp(OneUiTheme.SecQsDetailBlurRadiusDp), 24, 96);
+                    dialog.Window.AddFlags(WindowManagerFlags.BlurBehind);
+                    dialog.Window.SetBackgroundBlurRadius(blurRadiusPx);
+                    WindowManagerLayoutParams wlp = dialog.Window.Attributes;
+                    if (wlp != null) {
+                        wlp.BlurBehindRadius = blurRadiusPx;
+                        dialog.Window.Attributes = wlp;
                     }
+                } catch {
+                    // Fallback surface already retains WCAG AA contrast
                 }
             }
-
-            dialog.DismissEvent += (_, _) => ReleaseDialogBlur();
-            dialog.CancelEvent += (_, _) => ReleaseDialogBlur();
-            frame.ViewDetachedFromWindow += (_, _) => ReleaseDialogBlur();
         }
 
         RegisterActiveDialog(dialog);
@@ -470,14 +459,14 @@ public static class OneUiModalDialog {
 
         dialog.Show();
         card.Alpha = 0f;
-        card.ScaleX = 0.94f;
-        card.ScaleY = 0.94f;
+        card.ScaleX = OneUiTheme.QsEditRestScale;
+        card.ScaleY = OneUiTheme.QsEditRestScale;
         card.Animate()
             .Alpha(1f)
             .ScaleX(1f)
             .ScaleY(1f)
-            .SetDuration(210)
-            .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.6f))
+            .SetDuration(OneUiTheme.SecQsDetailOpenMs)
+            .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f))
             .Start();
         return dialog;
     }

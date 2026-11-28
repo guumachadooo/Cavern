@@ -308,7 +308,7 @@ public partial class MainActivity {
         });
 
         RegisterSettingsCard(slot6bCard, categoryIndex: 0, isProOnly: false, "normalizer limiter normalization psychoacoustics loudness iso 226 phon ebu r128 lufs dialnorm dialog boost true peak ceiling");
-
+        RegisterSettingsCard(BuildFilterStudioProCard(), categoryIndex: 0, isProOnly: true, "filter studio parametric eq cytomic svf nyquist decramped phase spectrum export equalizer apo camilladsp minidsp pipewire fir wav");
     }
 
     int ResolveUpmixModeIndex() {

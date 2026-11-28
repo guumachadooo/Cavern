@@ -701,7 +701,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 };
                 sv.SetClipToPadding(false);
                 sv.SetBackgroundColor(Color.Transparent);
-                sv.ScrollChange += (_, _) => navFrostedHost?.ScheduleDeferredBlur(180);
+                sv.ScrollChange += (_, ev) => {
+                    navFrostedHost?.ScheduleDeferredBlur(180);
+                    UpdateTopShellHeaderScroll(ev.ScrollY);
+                };
                 sv.AddView(tabPages[i]);
                 sv.Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone;
                 tabContainers[i] = sv;
@@ -818,6 +821,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         SyncPredictiveBackRegistration();
         navFrostedHost.Post(() => navFrostedHost?.ScheduleDeferredBlur(220));
         RefreshAllUiState();
+        SyncFilterStudioAndToolsFromStore();
     }
 
     sealed class RootInsetsListener(Action<WindowInsets> onApply) : Java.Lang.Object, View.IOnApplyWindowInsetsListener {

@@ -26,6 +26,15 @@ public static partial class OneUiTheme {
             borderAccent);
     }
 
+    /// <summary>
+    /// Creates an authentic Samsung One UI 9 SecQSDetail blurred-glass popup surface
+    /// (#CC2E2E2E or opaque fallback, 26dp corner radius, #26FFFFFF 1dp hairline stroke).
+    /// </summary>
+    public static Drawable CreateSecQsDetailDrawable(Context ctx, bool crossWindowBlurEnabled) {
+        Color fill = crossWindowBlurEnabled ? SecQsDetailBg : SecQsDetailBgFallback;
+        return CreateRoundedDrawable(ctx, fill, SecQsDetailCornerDp, SecQsDetailStroke, 1f);
+    }
+
     public static GradientDrawable CreateRoundedDrawable(
         Context ctx,
         Color fillColor,
@@ -441,6 +450,7 @@ public sealed class OneUiGlassDrawable : Drawable {
     readonly bool isFloatingCapsule;
     readonly Paint fillPaint = new(PaintFlags.AntiAlias);
     readonly Paint borderPaint = new(PaintFlags.AntiAlias);
+    readonly RectF drawRect = new();
 
     int cachedW = -1;
     int cachedH = -1;
@@ -455,7 +465,7 @@ public sealed class OneUiGlassDrawable : Drawable {
         this.cornerRadiusPx = cornerRadiusPx;
         this.accentBorder = accentBorder;
         this.isFloatingCapsule = isFloatingCapsule;
-        strokeWidthPx = Math.Max(1.5f, OneUiTheme.Dp(ctx, 1.1f));
+        strokeWidthPx = Math.Max(1.25f, OneUiTheme.Dp(ctx, 1.0f));
 
         fillPaint.SetStyle(Paint.Style.Fill);
         borderPaint.SetStyle(Paint.Style.Stroke);
@@ -477,20 +487,20 @@ public sealed class OneUiGlassDrawable : Drawable {
         }
 
         float halfStroke = strokeWidthPx * 0.5f;
-        RectF r = new(b.Left + halfStroke, b.Top + halfStroke, b.Right - halfStroke, b.Bottom - halfStroke);
+        drawRect.Set(b.Left + halfStroke, b.Top + halfStroke, b.Right - halfStroke, b.Bottom - halfStroke);
         float maxRad = Math.Min(w, h) * 0.5f;
         float rad = Math.Min(cornerRadiusPx, maxRad);
 
-        canvas.DrawRoundRect(r, rad, rad, fillPaint);
-        canvas.DrawRoundRect(r, rad, rad, borderPaint);
+        canvas.DrawRoundRect(drawRect, rad, rad, fillPaint);
+        canvas.DrawRoundRect(drawRect, rad, rad, borderPaint);
     }
 
     void UpdateShaders(float left, float top, float right, float bottom) {
         Color topFill = Color.Argb(
             fillColor.A,
-            Math.Min(255, fillColor.R + 14),
-            Math.Min(255, fillColor.G + 14),
-            Math.Min(255, fillColor.B + 18));
+            Math.Min(255, fillColor.R + 10),
+            Math.Min(255, fillColor.G + 10),
+            Math.Min(255, fillColor.B + 14));
         Color botFill = fillColor;
 
         fillPaint.SetShader(new LinearGradient(
@@ -507,9 +517,9 @@ public sealed class OneUiGlassDrawable : Drawable {
                 [0f, 1f],
                 Shader.TileMode.Clamp));
         } else {
-            Color topRim = isFloatingCapsule ? Color.Argb(95, 255, 255, 255) : OneUiTheme.GlassRimTop;
-            Color midRim = OneUiTheme.GlassRimMid;
-            Color botRim = isFloatingCapsule ? Color.Argb(60, 255, 255, 255) : OneUiTheme.GlassRimBottom;
+            Color topRim = isFloatingCapsule ? Color.Argb(72, 255, 255, 255) : OneUiTheme.GlassCardBorderTop;
+            Color midRim = OneUiTheme.GlassCardBorder;
+            Color botRim = isFloatingCapsule ? Color.Argb(46, 255, 255, 255) : OneUiTheme.GlassCardBorder;
             borderPaint.SetShader(new LinearGradient(
                 left, top, right, bottom,
                 [topRim.ToArgb(), midRim.ToArgb(), botRim.ToArgb()],
